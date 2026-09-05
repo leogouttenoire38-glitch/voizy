@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / Expo (mobile/)
+node_modules/
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/expo-env.d.ts
+
+# Web back-office
+web/node_modules/
+web/dist/
+
+# Supabase local tooling
+supabase/.temp/
+supabase/.branches/
+
+# E2E : état local (compte Stripe Connect de test réutilisé entre les runs)
+scripts/.e2e-connect.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# Freebuff workspace marker (not part of the project)
+.freebuff/

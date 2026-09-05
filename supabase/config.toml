@@ -1,0 +1,58 @@
+# Supabase CLI configuration — Voizy (achat groupé hyperlocal)
+# https://supabase.com/docs/reference/cli/config
+
+project_id = "voizy"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "20MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+additional_redirect_urls = ["voizy://payments", "voizy://order"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+policy = "oneshot"
+inspector_port = 8083
+
+[analytics]
+enabled = false
+
+# --- Fonctions planifiées (cron) ----------------------------------------------
+# La clôture des commandes (seuil atteint / non atteint) et l'expéditeur de
+# notifications push doivent être déclenchés périodiquement. Sur Supabase Cloud :
+# Dashboard → Edge Functions → "Scheduled" (intervalle conseillé 5 min pour les
+# deux). En local :
+#   curl -X POST http://127.0.0.1:54321/functions/v1/close-order \
+#        -H "Authorization: Bearer $SUPABASE_ANON_KEY"
+#   curl -X POST http://127.0.0.1:54321/functions/v1/dispatch-notifications \
+#        -H "Authorization: Bearer $SUPABASE_ANON_KEY"
