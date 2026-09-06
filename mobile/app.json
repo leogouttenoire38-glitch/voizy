@@ -18,6 +18,7 @@
     },
     "android": {
       "package": "com.voizy.app",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#4F46E5",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
