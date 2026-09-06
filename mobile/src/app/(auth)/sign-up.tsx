@@ -31,12 +31,20 @@ export default function SignUpScreen() {
     });
     setBusy(false);
 
-    if (err) return setError(err.message);
+    if (err) {
+      // Compte déjà créé mais non confirmé → renvoyer vers la vérification
+      // (GoTrue refuse la double inscription, l'utilisateur a besoin du code).
+      if (/already registered|already been registered/i.test(err.message)) {
+        return router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
+      }
+      return setError(err.message);
+    }
     if (data.session) {
       // Compte créé + session ouverte → on passe au choix du quartier.
       router.replace("/onboarding");
     } else {
-      setError("Compte créé ! Confirmez votre e-mail avant de vous connecter.");
+      // Confirmation par code e-mail : on passe à la saisie du code reçu.
+      router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
     }
   };
 

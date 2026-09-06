@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
-import { Link } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { Button, Field, Screen } from "../../components/ui";
 import { colors, spacing } from "../../theme";
 import { supabase } from "../../lib/supabase";
 
 export default function SignInScreen() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<"password" | "magic" | null>(null);
@@ -23,7 +24,7 @@ export default function SignInScreen() {
     // Succès : le layout (tabs) redirige vers / ou /onboarding.
   };
 
-  const doMagicLink = async () => {
+  const doCode = async () => {
     if (!email) return setError("Renseignez d'abord votre e-mail.");
     setBusy("magic");
     setError(null);
@@ -31,7 +32,7 @@ export default function SignInScreen() {
     const { error: err } = await supabase.auth.signInWithOtp({ email });
     setBusy(null);
     if (err) setError(err.message);
-    else setNotice("Lien magique envoyé ✉️ — vérifiez votre boîte mail.");
+    else router.replace({ pathname: "/verify-email", params: { email, type: "email" } });
   };
 
   return (
@@ -52,7 +53,7 @@ export default function SignInScreen() {
 
         <Button title="Se connecter" onPress={doSignIn} loading={busy === "password"} />
         <View style={{ height: spacing.sm }} />
-        <Button title="Recevoir un lien magique" onPress={doMagicLink} variant="secondary" loading={busy === "magic"} />
+        <Button title="Recevoir un code par e-mail" onPress={doCode} variant="secondary" loading={busy === "magic"} />
 
         <View style={styles.footer}>
           <Text style={styles.footerText}>Pas encore de compte ? </Text>

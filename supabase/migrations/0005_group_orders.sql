@@ -19,10 +19,10 @@ create table if not exists public.group_orders (
   base_price            numeric(10, 2) not null check (base_price > 0),
   group_price           numeric(10, 2) not null check (group_price > 0),
   deposit_amount        numeric(10, 2) not null default 0 check (deposit_amount >= 0),
-  commission_rate       numeric(3, 2) not null default 0.03,
+  commission_rate       numeric(3, 2) not null default 0.05,
   pickup_at             timestamptz not null,             -- échéance = verrouillage automatique
   pickup_location       text not null,
-  share_token           text not null unique default encode(gen_random_bytes(8), 'hex'),
+  share_token           text not null unique default encode(extensions.gen_random_bytes(8), 'hex'),
   confirmed_at          timestamptz,
   completed_at          timestamptz,
   cancelled_at          timestamptz,

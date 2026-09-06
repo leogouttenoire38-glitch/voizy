@@ -103,7 +103,7 @@ create table if not exists public.app_config (
 
 insert into public.app_config (key, value) values
   ('currency',                      jsonb '"eur"'),
-  ('commission_default',            jsonb '0.03'),
+  ('commission_default',            jsonb '0.05'),
   ('deposit_default',               jsonb '5'),
   ('order_min_duration_hours',      jsonb '1'),
   ('order_max_duration_days',       jsonb '30'),

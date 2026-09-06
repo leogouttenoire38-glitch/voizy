@@ -17,13 +17,13 @@ insert into auth.users
 values
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000000',
    'authenticated', 'authenticated', 'organisateur@voizy.test',
-   crypt('voizy-demo', gen_salt('bf')), now(),
+   extensions.crypt('voizy-demo', extensions.gen_salt('bf')), now(),
    '', '', '', '', '', '', '',
    '{"provider":"email","providers":["email"]}',
    '{"full_name":"Camille"}', now(), now()),
   ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000000',
    'authenticated', 'authenticated', 'commercant@voizy.test',
-   crypt('voizy-demo', gen_salt('bf')), now(),
+   extensions.crypt('voizy-demo', extensions.gen_salt('bf')), now(),
    '', '', '', '', '', '', '',
    '{"provider":"email","providers":["email"]}',
    '{"full_name":"Fatima"}', now(), now())
@@ -45,22 +45,22 @@ insert into public.merchants (id, name, description, category, address, lat, lng
    'Épicerie des Aligre',
    'Épicerie de quartier : conserves, huiles, pâtes, épices et produits du terroir. Tenue par Fatima, place du marché depuis 15 ans.',
    'epicerie', '12 rue de Cotte, 75012 Paris', 48.8496, 2.3749,
-   'active', '00000000-0000-0000-0000-000000000002', 0.03),
+   'active', '00000000-0000-0000-0000-000000000002', 0.05),
   ('10000000-0000-0000-0000-000000000002',
    'Primeur Racines & Compagnie',
    'Légumes racines et fruits de saison, sélectionnés chez des maraîchers d''Île-de-France.',
    'primeur', '4 place d''Aligre, 75012 Paris', 48.8492, 2.3757,
-   'active', null, 0.03),
+   'active', null, 0.05),
   ('10000000-0000-0000-0000-000000000003',
    'Torréfacteur Saint-Antoine',
    'Cafés en grains torréfiés chaque semaine sur place, cafés moulus et thés en vrac.',
    'torrefaction', '18 rue du Faubourg Saint-Antoine, 75012 Paris', 48.8508, 2.3744,
-   'active', null, 0.03),
+   'active', null, 0.05),
   ('10000000-0000-0000-0000-000000000004',
    'Cave & Conserves du Faubourg',
    'Vins de petits producteurs, conserves artisanales, miels et confitures de la région.',
    'cave', '27 rue de Charenton, 75012 Paris', 48.8483, 2.3712,
-   'active', null, 0.03)
+   'active', null, 0.05)
 on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------

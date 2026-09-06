@@ -6,7 +6,18 @@
 //
 // Flux Connect Express (paiement vers le commerçant) : les PaymentIntents sont
 // créés avec `transfer_data.destination` = compte Connect du commerçant,
-// `on_behalf_of` = même compte, et `application_fee_amount` = commission Voizy.
+// `on_behalf_of` = même compte, et `transfer_data.amount` = montant NET
+// transféré au commerçant (montant − commission Voizy − frais Stripe).
+//
+// Schéma de frais : les frais de traitement Stripe sont supportés par le
+// commerçant (comme sur un terminal classique). Les destination charges sont
+// TOUJOURS facturées à la plateforme par Stripe (quelle que soit la valeur de
+// `controller.fees.payer`, qui ne concerne que les direct charges), et Stripe
+// interdit de combiner `application_fee_amount` avec `transfer_data[amount]`
+// (paramètres mutuellement exclusifs). La façon de faire porter les frais au
+// commerçant est donc de réduire le transfert : `transfer_data.amount` =
+// montant − commission Voizy − frais Stripe estimés. La plateforme reverse
+// alors les frais sur sa part et ne conserve que sa commission.
 
 const BASE = "https://api.stripe.com";
 
@@ -116,6 +127,21 @@ export async function verifyStripeWebhook(
 
 export function cents(amount: number | null | undefined): number {
   return Math.round(Number(amount ?? 0) * 100);
+}
+
+// Commission par défaut appliquée aux commandes (5 %) — le taux réel d'un
+// commerçant est stocké dans `merchants.commission_rate` (snapshoté dans
+// `group_orders.commission_rate` à la création de la commande).
+export const DEFAULT_COMMISSION_RATE = 0.05;
+
+/**
+ * Estimation des frais de traitement Stripe (zone euro, cartes UE standard) :
+ * 1,5 % + 0,25 €. Partie pourcentage tronquée au centime (9,50 € → 0,14 +
+ * 0,25 = 0,39 €). Supportés par le commerçant via transfer_data.amount ; un
+ * écart éventuel (interchange, devise) reste à la charge de la plateforme.
+ */
+export function stripeProcessingFeeCents(amountCents: number): number {
+  return Math.floor(amountCents * 0.015) + 25;
 }
 
 /** Crée (ou réutilise) le customer Stripe d'un utilisateur. */

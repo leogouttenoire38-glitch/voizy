@@ -37,7 +37,18 @@ enable_signup = true
 [auth.email]
 enable_signup = true
 double_confirm_changes = false
-enable_confirmations = false
+# Confirmation par CODE e-mail (OTP 6 chiffres), pas de lien : les templates
+# (supabase/templates/*.html) affichent {{ .Token }} et l'app le saisit via
+# /verify-email. Aucune URL de redirection n'est envoyée.
+enable_confirmations = true
+
+[auth.email.template.confirmation]
+subject = "Votre code de vérification Voizy"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.magic_link]
+subject = "Votre code de connexion Voizy"
+content_path = "./supabase/templates/magic_link.html"
 
 [edge_runtime]
 enabled = true

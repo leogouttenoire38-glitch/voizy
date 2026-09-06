@@ -21,6 +21,12 @@ supabase/.branches/
 
 # E2E : état local (compte Stripe Connect de test réutilisé entre les runs)
 scripts/.e2e-connect.json
+scripts/.whsec-cloud.txt
+scripts/.env
+scripts/.env.*
+# Snapshots d'administration Cloud (auth/SMTP) — fichiers de travail, pas du code
+scripts/.cloud-auth.json
+scripts/.cloud-auth-update.json
 
 # OS / editor
 .DS_Store

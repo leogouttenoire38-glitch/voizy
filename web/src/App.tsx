@@ -47,6 +47,16 @@ interface MerchantStats {
   avg_fill: number;
 }
 
+interface CommissionSummary {
+  current_month: {
+    volume: number;
+    commission: number;
+    fees_estimated: number;
+    net: number;
+    transactions: number;
+  };
+}
+
 const fmtEuro = (v: number) => `${v.toFixed(2).replace(".", ",")} €`;
 const fmtWhen = (iso: string) =>
   new Date(iso).toLocaleString("fr-FR", {
@@ -202,6 +212,7 @@ function Dashboard() {
 // ---------------------------------------------------------------------------
 function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant; refreshKey: number; onChanged: () => void }) {
   const [stats, setStats] = useState<MerchantStats | null>(null);
+  const [comm, setComm] = useState<CommissionSummary | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -209,7 +220,7 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [statsRes, ordersRes] = await Promise.all([
+    const [statsRes, ordersRes, commRes] = await Promise.all([
       supabase.rpc("merchant_stats", { p_merchant_id: merchant.id }),
       supabase
         .from("group_orders")
@@ -217,8 +228,10 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
         .eq("merchant_id", merchant.id)
         .order("created_at", { ascending: false })
         .limit(50),
+      supabase.rpc("merchant_commission_summary", { p_merchant_id: merchant.id }),
     ]);
     if (!statsRes.error) setStats((statsRes.data as MerchantStats | null) ?? null);
+    if (!commRes.error) setComm((commRes.data as CommissionSummary | null) ?? null);
     if (ordersRes.error) setError(ordersRes.error.message);
     else setOrders((ordersRes.data as OrderRow[]) ?? []);
     setLoading(false);
@@ -280,6 +293,19 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
               <Stat label="Participants uniques" value={String(stats.unique_participants ?? 0)} />
               <Stat label="Commandes confirmées" value={`${stats.confirmed_orders ?? 0}/${stats.total_orders ?? 0}`} />
               <Stat label="Seuil atteint" value={`${stats.threshold_rate ?? 0} %`} />
+            </div>
+          ) : null}
+
+          {comm?.current_month && comm.current_month.transactions > 0 ? (
+            <div className="card">
+              <p>
+                <strong>Ce mois-ci</strong> · volume {fmtEuro(comm.current_month.volume)} ·{" "}
+                commission Voizy {fmtEuro(comm.current_month.commission)} · frais Stripe (est.){" "}
+                {fmtEuro(comm.current_month.fees_estimated)} · net commerçant{" "}
+                {fmtEuro(comm.current_month.net)} (sur {comm.current_month.transactions} paiement
+                {comm.current_month.transactions > 1 ? "s" : ""} capturé
+                {comm.current_month.transactions > 1 ? "s" : ""})
+              </p>
             </div>
           ) : null}
 

@@ -23,7 +23,7 @@ create table if not exists public.merchants (
                       check (status in ('onboarding', 'pending', 'active', 'paused')),
   stripe_account_id   text,                -- compte Connect Express
   manager_id          uuid references public.users (id),  -- compte back-office (concierge)
-  commission_rate     numeric(3, 2) not null default 0.03 check (commission_rate between 0 and 0.10),
+  commission_rate     numeric(3, 2) not null default 0.05 check (commission_rate between 0 and 0.10),
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now()
 );

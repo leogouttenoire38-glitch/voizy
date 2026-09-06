@@ -41,9 +41,13 @@ async function callEdge<T>(name: string, opts: CallOptions = {}): Promise<T> {
 
 // --- Géocodage (quartier de l'utilisateur) -----------------------------------
 export async function geocodeAddress(address: string) {
+  const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
   const res = await fetch(`${apiOrigin()}/functions/v1/geocode`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(anon ? { apikey: anon } : {}),
+    },
     body: JSON.stringify({ address }),
   });
   const data = (await res.json().catch(() => ({}))) as {

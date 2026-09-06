@@ -11,7 +11,8 @@
 //      compteur intact
 //   C. Course au seuil : 3 participants concurrents sur un seuil de 2 →
 //      exactement 2 validés, commande confirmée, 2 PIs produit CAPTURÉS
-//      (commission Voizy incluse), 2 PIs caution NON capturés (pré-autorisation)
+//      (commission Voizy + frais Stripe à la charge du commerçant), 2 PIs
+//      caution NON capturés (pré-autorisation, transfert réduit des frais)
 //   D. No-show : caution du no-show CAPTURÉE, caution du présent LIBÉRÉE
 //   E. 3-D Secure : échec propre — PIs annulés, compteur intact
 //   F. Seuil non atteint : close-order → annulation des pré-autorisations,
@@ -131,11 +132,26 @@ async function signUp(email, fullName) {
   if (status !== 200) throw new Error(`signUp ${email} → ${status} ${JSON.stringify(data)}`);
   return data;
 }
+async function confirmUser(userId) {
+  // La confirmation par code e-mail est active (local comme cloud) : un compte
+  // créé via signUp est inactif tant que le code n'est pas vérifié. L'E2E
+  // simule la saisie du code en confirmant via l'admin API.
+  const { status, data } = await http(`${URL}/auth/v1/admin/users/${userId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...serviceHeaders() },
+    body: JSON.stringify({ email_confirm: true }),
+  });
+  if (status !== 200) throw new Error(`confirm ${userId} → ${status} ${JSON.stringify(data)}`);
+}
 async function authUser(email, fullName) {
   try {
     return await signIn(email);
   } catch {
-    await signUp(email, fullName);
+    const res = await signUp(email, fullName);
+    // Avec confirmation par e-mail, signUp renvoie l'utilisateur à plat (id en
+    // racine) ; sans confirmation, il est sous `user`. Les deux cas sont couverts.
+    const uid = res.id ?? res.user?.id;
+    if (uid) await confirmUser(uid);
     return await signIn(email);
   }
 }
@@ -450,20 +466,28 @@ async function scenarioC() {
   check("2 participations « paid », 0 en attente", paid.length === 2 && parts.every((p) => p.status === "paid"));
 
   // Paiements côté Stripe
+  // Produit 9,50 € : commission Voizy 5 % = 0,48 € et frais Stripe estimés
+  // 1,5 % + 0,25 € = 0,39 € sont nets du transfert (application_fee_amount et
+  // transfer_data[amount] étant mutuellement exclusifs côté Stripe) → le
+  // commerçant reçoit 9,50 − 0,48 − 0,39 = 8,63 €. Caution 5,00 € : transfert
+  // réduit des frais (0,32 €) = 4,68 € — prélevés uniquement si la caution est
+  // capturée (no-show).
   let prodOk = 0;
   let depOk = 0;
   for (const p of paid) {
     const prod = await getPi(p.product_pi_id);
     const dep = await getPi(p.deposit_pi_id);
-    const ok1 = prod.status === "succeeded" && prod.amount_received === 950 && prod.application_fee_amount === 29;
-    const ok2 = dep.status === "requires_capture" && dep.amount_capturable === 500;
+    const ok1 = prod.status === "succeeded" && prod.amount_received === 950 &&
+      prod.transfer_data?.amount === 863;
+    const ok2 = dep.status === "requires_capture" && dep.amount_capturable === 500 &&
+      dep.transfer_data?.amount === 468;
     if (ok1) prodOk++;
     if (ok2) depOk++;
-    if (!ok1) note(`PI produit ${prod.id} : status=${prod.status} reçu=${prod.amount_received} fee=${prod.application_fee_amount}`);
-    if (!ok2) note(`PI caution ${dep.id} : status=${dep.status} capturable=${dep.amount_capturable}`);
+    if (!ok1) note(`PI produit ${prod.id} : status=${prod.status} reçu=${prod.amount_received} transfer=${prod.transfer_data?.amount}`);
+    if (!ok2) note(`PI caution ${dep.id} : status=${dep.status} capturable=${dep.amount_capturable} transfer=${dep.transfer_data?.amount}`);
   }
-  check("2 PIs produit CAPTURÉS (9,50 € + commission 3 % = 0,29 €)", prodOk === 2);
-  check("2 PIs caution en pré-autorisation (jamais débités)", depOk === 2);
+  check("2 PIs produit CAPTURÉS (9,50 € → net commerçant 8,63 € = − commission 5 % 0,48 € − frais Stripe 0,39 €)", prodOk === 2);
+  check("2 PIs caution en pré-autorisation (jamais débités, transfert 4,68 €)", depOk === 2);
 
   const txs = await dbSelect(
     "transactions",
@@ -513,7 +537,14 @@ async function scenarioD() {
 
   const depNoShow = await getPi(noShowPart.deposit_pi_id);
   const depPresent = await getPi(presentPart.deposit_pi_id);
-  check("caution no-show CAPTURÉE", depNoShow.status === "succeeded" && depNoShow.amount_received === 500, depNoShow.status);
+  // Capture no-show : 5,00 € débités, frais Stripe 0,32 € à la charge du
+  // commerçant → transfert réduit à 4,68 €.
+  check(
+    "caution no-show CAPTURÉE (5,00 € débités, frais 0,32 € côté commerçant → transfert 4,68 €)",
+    depNoShow.status === "succeeded" && depNoShow.amount_received === 500 &&
+      depNoShow.transfer_data?.amount === 468,
+    depNoShow.status,
+  );
   check("caution présent LIBÉRÉE", depPresent.status === "canceled", depPresent.status);
 
   const fp = (await dbSelect("participations", `select=status,deposit_status&id=eq.${noShowPart.id}`))[0];
