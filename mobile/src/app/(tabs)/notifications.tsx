@@ -1,18 +1,18 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Badge, EmptyState, Screen, ScreenHeader } from "../components/ui";
-import { colors, radius, spacing } from "../theme";
-import { supabase } from "../lib/supabase";
-import { useAuth } from "../lib/auth";
-import type { AppNotification } from "../types";
+import { Badge, EmptyState, ScreenHeader, type BadgeTone } from "../../components/ui";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../../theme";
+import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../lib/auth";
+import type { AppNotification } from "../../types";
 
-const TYPE_META: Record<string, { icon: string; label: string; tone: "brand" | "accent" | "danger" | "warning" | "muted" }> = {
+const TYPE_META: Record<string, { icon: string; label: string; tone: BadgeTone }> = {
   order_joined: { icon: "👋", label: "Nouveau participant", tone: "brand" },
-  order_confirmed: { icon: "🎉", label: "Commande confirmée", tone: "accent" },
+  order_confirmed: { icon: "🎉", label: "Commande confirmée", tone: "success" },
   order_cancelled: { icon: "ℹ️", label: "Commande annulée", tone: "danger" },
-  pickup_reminder: { icon: "⏰", label: "Rappel de retrait", tone: "warning" },
-  deposit_released: { icon: "✅", label: "Caution libérée", tone: "accent" },
+  pickup_reminder: { icon: "⏰", label: "Rappel de retrait", tone: "accent" },
+  deposit_released: { icon: "✅", label: "Caution libérée", tone: "success" },
   deposit_captured: { icon: "🔒", label: "Caution retenue", tone: "danger" },
   order_completed: { icon: "🎉", label: "Commande terminée", tone: "muted" },
   no_show: { icon: "⚠️", label: "No-show signalé", tone: "danger" },
@@ -81,8 +81,8 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <Screen>
-      <ScreenHeader title="Notifications" />
+    <View style={styles.root}>
+      <ScreenHeader title="Notifications" subtitle="Tout ce qui se passe sur vos commandes" />
       {loading ? (
         <ActivityIndicator size="large" color={colors.brand} style={{ marginTop: 60 }} />
       ) : items.length === 0 ? (
@@ -96,10 +96,12 @@ export default function NotificationsScreen() {
           data={items}
           keyExtractor={(n) => n.id}
           renderItem={({ item }) => {
-            const meta = TYPE_META[item.type] ?? { icon: "🔔", label: "Notification", tone: "muted" as const };
+            const meta = TYPE_META[item.type] ?? { icon: "🔔", label: "Notification", tone: "muted" as BadgeTone };
             return (
               <Pressable
                 onPress={() => onPressItem(item)}
+                accessibilityRole="button"
+                accessibilityLabel={`${meta.label} : ${body(item)}`}
                 style={({ pressed }) => [styles.row, !item.read && styles.rowUnread, pressed && { opacity: 0.85 }]}
               >
                 <Text style={styles.icon}>{meta.icon}</Text>
@@ -119,11 +121,12 @@ export default function NotificationsScreen() {
           contentContainerStyle={{ paddingBottom: 60 }}
         />
       )}
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, paddingHorizontal: spacing.md, backgroundColor: colors.bg },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -134,10 +137,10 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  rowUnread: { borderColor: colors.brand, backgroundColor: colors.brandSoft },
-  icon: { fontSize: 22, marginRight: spacing.md },
-  label: { fontSize: 14, fontWeight: "700", color: colors.text },
-  body: { fontSize: 13, color: colors.textMuted, marginTop: 3, lineHeight: 18 },
-  date: { fontSize: 11, color: colors.textFaint, marginTop: 4 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.brand, marginLeft: spacing.sm },
+  rowUnread: { borderColor: colors.brand, borderWidth: 2, backgroundColor: colors.brandSoft },
+  icon: { fontSize: 26, marginRight: spacing.md },
+  label: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  body: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 3, lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  date: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 4, fontFamily: fonts.regular },
+  dot: { width: 12, height: 12, borderRadius: 6, backgroundColor: colors.brand, marginLeft: spacing.sm },
 });

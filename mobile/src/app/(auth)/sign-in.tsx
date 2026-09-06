@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { Link, useRouter } from "expo-router";
 import { Button, Field, Screen } from "../../components/ui";
-import { colors, spacing } from "../../theme";
+import { colors, fonts, fontSizes, lineHeights, spacing } from "../../theme";
+import { humanAuthError } from "../../lib/errors";
 import { supabase } from "../../lib/supabase";
 
 export default function SignInScreen() {
@@ -20,7 +21,7 @@ export default function SignInScreen() {
     setNotice(null);
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(null);
-    if (err) setError(err.message);
+    if (err) setError(humanAuthError(err.message, "Impossible de vous connecter. Réessayez."));
     // Succès : le layout (tabs) redirige vers / ou /onboarding.
   };
 
@@ -31,7 +32,7 @@ export default function SignInScreen() {
     setNotice(null);
     const { error: err } = await supabase.auth.signInWithOtp({ email });
     setBusy(null);
-    if (err) setError(err.message);
+    if (err) setError(humanAuthError(err.message, "Impossible d'envoyer le code. Réessayez."));
     else router.replace({ pathname: "/verify-email", params: { email, type: "email" } });
   };
 
@@ -45,8 +46,8 @@ export default function SignInScreen() {
           </Text>
         </View>
 
-        <Field label="E-mail" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" />
-        <Field label="Mot de passe" value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" />
+        <Field label="E-mail" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" placeholder="votre@email.fr" />
+        <Field label="Mot de passe" value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" placeholder="••••••••" />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
@@ -68,11 +69,11 @@ export default function SignInScreen() {
 
 const styles = StyleSheet.create({
   hero: { marginTop: 48, marginBottom: 32 },
-  logo: { fontSize: 34, fontWeight: "900", color: colors.brand, letterSpacing: 1 },
-  tagline: { fontSize: 16, color: colors.textMuted, lineHeight: 24, marginTop: 8 },
-  error: { color: colors.danger, fontSize: 13, marginBottom: spacing.sm },
-  notice: { color: colors.accent, fontSize: 13, marginBottom: spacing.sm },
+  logo: { fontSize: 36, fontWeight: "900", color: colors.brand, letterSpacing: 1.5, fontFamily: fonts.extraBold },
+  tagline: { fontSize: fontSizes.body, color: colors.inkMuted, lineHeight: lineHeights.body, marginTop: 8, fontFamily: fonts.regular },
+  error: { color: colors.danger, fontSize: fontSizes.body, marginBottom: spacing.sm, fontFamily: fonts.medium },
+  notice: { color: colors.brand, fontSize: fontSizes.body, marginBottom: spacing.sm, fontFamily: fonts.semiBold },
   footer: { flexDirection: "row", justifyContent: "center", marginTop: spacing.lg },
-  footerText: { color: colors.textMuted, fontSize: 14 },
-  footerLink: { color: colors.brand, fontWeight: "700", fontSize: 14 },
+  footerText: { color: colors.inkMuted, fontSize: fontSizes.body, fontFamily: fonts.regular },
+  footerLink: { color: colors.brand, fontWeight: "700", fontSize: fontSizes.body, fontFamily: fonts.bold },
 });

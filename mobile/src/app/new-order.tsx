@@ -11,14 +11,16 @@ import {
 } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Button, Card, Field, Screen, ScreenHeader } from "../components/ui";
-import { colors, radius, spacing } from "../theme";
+import { Button, Card, Field, ProgressSteps, Screen, ScreenHeader } from "../components/ui";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../theme";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { orderShareMessage, orderShareUrl } from "../lib/share";
 import { formatDateTime, formatPrice } from "../lib/format";
 import type { Merchant, Offer } from "../types";
 
+// Création d'une commande en 3 étapes : une seule décision par écran.
+//   Étape 1 : quel commerçant ?   Étape 2 : quelle offre ?   Étape 3 : quand ?
 export default function NewOrderScreen() {
   const router = useRouter();
   const { profile } = useAuth();
@@ -28,6 +30,7 @@ export default function NewOrderScreen() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loadingMerchants, setLoadingMerchants] = useState(true);
 
+  const [step, setStep] = useState(1);
   const [merchantId, setMerchantId] = useState<string | null>(params.merchantId ?? null);
   const [offerId, setOfferId] = useState<string | null>(params.offerId ?? null);
   const [pickupDate, setPickupDate] = useState<Date | null>(null);
@@ -87,6 +90,12 @@ export default function NewOrderScreen() {
     })();
   }, [merchantId, params.offerId]);
 
+  // Deep link avec commerçant/offre : on avance directement aux étapes suivantes.
+  useEffect(() => {
+    if (params.merchantId && merchantId) setStep((s) => Math.max(s, 2));
+    if (params.offerId && offerId) setStep(3);
+  }, [params.merchantId, params.offerId, merchantId, offerId]);
+
   const offer = useMemo(() => offers.find((o) => o.id === offerId) ?? null, [offers, offerId]);
   const merchant = useMemo(() => merchants.find((m) => m.id === merchantId) ?? null, [merchants, merchantId]);
 
@@ -122,6 +131,17 @@ export default function NewOrderScreen() {
         }
         return next;
       });
+    }
+  };
+
+  const goNext = () => {
+    setError(null);
+    if (step === 1) {
+      if (!merchantId) return setError("Choisissez d'abord un commerçant.");
+      setStep(2);
+    } else if (step === 2) {
+      if (!offerId) return setError("Choisissez d'abord une offre.");
+      setStep(3);
     }
   };
 
@@ -164,7 +184,7 @@ export default function NewOrderScreen() {
     return (
       <Screen>
         <ScreenHeader title="Commande publiée 🎉" />
-        <Card style={styles.successCard}>
+        <Card style={styles.successCard} tone="success">
           <Text style={styles.successTitle}>{created.title}</Text>
           <Text style={styles.successLine}>
             Seuil : {created.threshold} participants · Prix groupé : {formatPrice(created.group_price)}
@@ -187,33 +207,51 @@ export default function NewOrderScreen() {
   return (
     <Screen>
       <ScreenHeader title="Nouvelle commande" subtitle="Achetez groupé chez un commerçant du quartier" />
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.sectionLabel}>1 · Commerçant</Text>
-        {loadingMerchants ? (
-          <ActivityIndicator color={colors.brand} style={{ marginVertical: spacing.md }} />
-        ) : merchants.length === 0 ? (
-          <Text style={styles.muted}>Aucun commerçant partenaire actif pour l'instant.</Text>
-        ) : (
-          <View style={styles.chipWrap}>
-            {merchants.map((m) => (
-              <ChipRow key={m.id} label={m.name} selected={merchantId === m.id} onPress={() => setMerchantId(m.id)} />
-            ))}
-          </View>
-        )}
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ProgressSteps current={step} total={3} />
 
-        {merchantId && (
-          <>
-            <Text style={styles.sectionLabel}>2 · Offre</Text>
+        {step === 1 ? (
+          <View>
+            <Text style={styles.stepQuestion}>Chez quel commerçant ?</Text>
+            {loadingMerchants ? (
+              <ActivityIndicator color={colors.brand} style={{ marginVertical: spacing.md }} />
+            ) : merchants.length === 0 ? (
+              <Text style={styles.muted}>Aucun commerçant partenaire actif pour l'instant.</Text>
+            ) : (
+              merchants.map((m) => (
+                <Pressable
+                  key={m.id}
+                  onPress={() => setMerchantId(m.id)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: merchantId === m.id }}
+                  style={[styles.choiceCard, merchantId === m.id && styles.choiceCardSelected]}
+                >
+                  <Text style={styles.choiceTitle}>🏪 {m.name}</Text>
+                  <Text style={styles.choiceMeta}>{m.address}</Text>
+                  {merchantId === m.id ? <Text style={styles.check}>✓ Choisi</Text> : null}
+                </Pressable>
+              ))
+            )}
+          </View>
+        ) : step === 2 ? (
+          <View>
+            <Text style={styles.stepQuestion}>Quelle offre choisir ?</Text>
             {offers.length === 0 ? (
               <Text style={styles.muted}>Ce commerçant n'a pas d'offre active.</Text>
             ) : (
               offers.map((o) => (
-                <Pressable key={o.id} onPress={() => setOfferId(o.id)} style={[styles.offerCard, offerId === o.id && styles.offerCardSelected]}>
+                <Pressable
+                  key={o.id}
+                  onPress={() => setOfferId(o.id)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: offerId === o.id }}
+                  style={[styles.choiceCard, offerId === o.id && styles.choiceCardSelected]}
+                >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.offerTitle}>{o.title}</Text>
+                    <Text style={styles.choiceTitle}>{o.title}</Text>
                     <Text style={styles.offerDesc} numberOfLines={2}>{o.description}</Text>
                     <Text style={styles.offerMeta}>
-                      {formatPrice(o.base_price)} → <Text style={{ color: colors.accent, fontWeight: "800" }}>{formatPrice(o.group_price)}</Text>
+                      {formatPrice(o.base_price)} → <Text style={styles.offerPrice}>{formatPrice(o.group_price)}</Text>
                       {" · seuil "}{o.threshold} pers. · caution {formatPrice(o.deposit_amount)}
                     </Text>
                   </View>
@@ -221,17 +259,15 @@ export default function NewOrderScreen() {
                 </Pressable>
               ))
             )}
-          </>
-        )}
-
-        {offer && (
-          <>
-            <Text style={styles.sectionLabel}>3 · Retrait</Text>
-            <Pressable onPress={() => setShowPicker("date")} style={styles.pickerRow}>
+          </View>
+        ) : (
+          <View>
+            <Text style={styles.stepQuestion}>Quand venez-vous la chercher ?</Text>
+            <Pressable onPress={() => setShowPicker("date")} accessibilityRole="button" style={styles.pickerRow}>
               <Text style={styles.pickerLabel}>Date</Text>
               <Text style={styles.pickerValue}>{pickupDate ? formatDateTime(pickupDate.toISOString()) : ""}</Text>
             </Pressable>
-            <Pressable onPress={() => setShowPicker("time")} style={styles.pickerRow}>
+            <Pressable onPress={() => setShowPicker("time")} accessibilityRole="button" style={styles.pickerRow}>
               <Text style={styles.pickerLabel}>Heure</Text>
               <Text style={styles.pickerValue}>
                 {pickupDate
@@ -244,7 +280,7 @@ export default function NewOrderScreen() {
               value={pickupLocation}
               onChangeText={setPickupLocation}
               placeholder={merchant?.address}
-              placeholderTextColor={colors.textFaint}
+              placeholderTextColor={colors.inkMuted}
             />
 
             {showPicker && pickupDate ? (
@@ -257,88 +293,88 @@ export default function NewOrderScreen() {
               />
             ) : null}
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {offer ? (
+              <Card style={styles.recapCard}>
+                <Text style={styles.recapTitle}>Récapitulatif</Text>
+                <Text style={styles.recapLine}>{merchant?.name} — {offer.title}</Text>
+                <Text style={styles.recapLine}>
+                  {formatPrice(offer.group_price)} dès {offer.threshold} participants
+                  {" · caution "}{formatPrice(offer.deposit_amount)}
+                </Text>
+              </Card>
+            ) : null}
+          </View>
+        )}
 
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {/* Navigation d'étape : une seule action principale par écran */}
+        {step < 3 ? (
+          <View style={styles.stepNav}>
+            {step > 1 ? <Button title="Retour" variant="ghost" onPress={() => setStep(step - 1)} /> : null}
+            <Button title="Continuer" onPress={goNext} style={step === 1 ? styles.stepNavFull : undefined} />
+          </View>
+        ) : (
+          <View style={styles.stepNav}>
+            <Button title="Retour" variant="ghost" onPress={() => setStep(2)} />
             <Button
-              title={`Publier la commande — ${formatPrice(offer.group_price)} dès ${offer.threshold} participants`}
+              title={`Publier la commande — ${offer ? formatPrice(offer.group_price) : ""}`}
               onPress={publish}
               loading={publishing}
-              style={{ marginTop: spacing.md }}
+              variant="accent"
             />
-          </>
+          </View>
         )}
       </ScrollView>
     </Screen>
   );
 }
 
-function ChipRow({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={[styles.chip, selected && styles.chipSelected]}>
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]} numberOfLines={1}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   scroll: { paddingBottom: 60 },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  chip: {
-    maxWidth: "100%",
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  chipSelected: { backgroundColor: colors.brand, borderColor: colors.brand },
-  chipText: { fontSize: 13, color: colors.textMuted },
-  chipTextSelected: { color: colors.onBrand, fontWeight: "600" },
-  offerCard: {
+  stepQuestion: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, marginBottom: spacing.md, fontFamily: fonts.bold },
+  choiceCard: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
     borderRadius: radius.lg,
     padding: spacing.md,
     marginBottom: spacing.sm,
+    minHeight: 72,
   },
-  offerCardSelected: { borderColor: colors.brand, borderWidth: 2 },
-  offerTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
-  offerDesc: { fontSize: 12, color: colors.textMuted, marginTop: 3 },
-  offerMeta: { fontSize: 12, color: colors.textMuted, marginTop: 6 },
-  check: { fontSize: 20, color: colors.brand, marginLeft: spacing.sm, fontWeight: "800" },
+  choiceCardSelected: { borderColor: colors.brand, borderWidth: 2.5, backgroundColor: colors.brandSoft },
+  choiceTitle: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  choiceMeta: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 3, fontFamily: fonts.regular },
+  offerDesc: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 3, fontFamily: fonts.regular },
+  offerMeta: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 6, fontFamily: fonts.regular },
+  offerPrice: { color: colors.brand, fontWeight: "800", fontFamily: fonts.bold },
+  check: { fontSize: fontSizes.body, color: colors.brand, marginLeft: spacing.sm, fontWeight: "800", fontFamily: fonts.bold },
   pickerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    minHeight: touch.secondary,
     backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: 13,
     marginBottom: spacing.sm,
   },
-  pickerLabel: { fontSize: 14, color: colors.textMuted },
-  pickerValue: { fontSize: 14, fontWeight: "700", color: colors.text },
-  error: { color: colors.danger, fontSize: 13, marginTop: spacing.sm },
-  muted: { fontSize: 13, color: colors.textMuted },
+  pickerLabel: { fontSize: fontSizes.body, color: colors.inkMuted, fontFamily: fonts.regular },
+  pickerValue: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  recapCard: { marginTop: spacing.md },
+  recapTitle: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, marginBottom: 6, fontFamily: fonts.bold },
+  recapLine: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 3, lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  error: { color: colors.danger, fontSize: fontSizes.body, marginTop: spacing.sm, fontFamily: fonts.medium },
+  muted: { fontSize: fontSizes.body, color: colors.inkMuted, fontFamily: fonts.regular },
+  stepNav: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg },
+  stepNavFull: { flex: 1 },
   successCard: { marginTop: spacing.md },
-  successTitle: { fontSize: 18, fontWeight: "800", color: colors.text },
-  successLine: { fontSize: 14, color: colors.textMuted, marginTop: 6 },
-  successHint: { fontSize: 13, color: colors.textFaint, lineHeight: 19, marginTop: spacing.md, marginBottom: spacing.md },
+  successTitle: { fontSize: fontSizes.title, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold },
+  successLine: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 6, fontFamily: fonts.regular },
+  successHint: { fontSize: fontSizes.body, color: colors.ink, lineHeight: lineHeights.body, marginTop: spacing.md, marginBottom: spacing.md, fontFamily: fonts.regular },
 });

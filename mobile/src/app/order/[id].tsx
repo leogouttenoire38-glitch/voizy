@@ -10,9 +10,9 @@ import {
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Button, Card, Row, ScreenHeader } from "../../components/ui";
+import { Badge, Button, Card, Row, ScreenHeader, type BadgeTone } from "../../components/ui";
 import { ProgressBar } from "../../components/ProgressBar";
-import { colors, radius, spacing } from "../../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import { confirmPickup, joinOrder } from "../../lib/api";
@@ -25,6 +25,13 @@ interface OrderDetail extends GroupOrder {
   merchants?: Merchant | null;
   offers?: { title: string } | null;
 }
+
+const STATUS_META: Record<GroupOrder["status"], { label: string; tone: BadgeTone }> = {
+  open: { label: "En cours", tone: "brand" },
+  confirmed: { label: "Confirmée", tone: "success" },
+  completed: { label: "Terminée", tone: "muted" },
+  cancelled: { label: "Annulée", tone: "danger" },
+};
 
 export default function OrderScreen() {
   const router = useRouter();
@@ -168,6 +175,7 @@ export default function OrderScreen() {
   const doConfirmPickup = async () => {
     if (!order) return;
     const present = participants.length - noShowIds.size;
+    // Action coûteuse (libération de cautions) : confirmation explicite requise.
     Alert.alert(
       "Confirmer le retrait",
       `${present} participant${present > 1 ? "s" : ""} présent${present > 1 ? "s" : ""}${
@@ -176,7 +184,7 @@ export default function OrderScreen() {
       [
         { text: "Annuler", style: "cancel" },
         {
-          text: "Confirmer",
+          text: "Confirmer le retrait",
           style: "destructive",
           onPress: async () => {
             setConfirming(true);
@@ -223,24 +231,16 @@ export default function OrderScreen() {
   const canJoin = isOpen && !isOrganizer && !isParticipant;
   const merchant = order.merchants;
   const progressCurrent = Math.min(order.participants_current, order.threshold);
+  const statusMeta = STATUS_META[order.status] ?? STATUS_META.open;
 
   return (
     <View style={styles.root}>
-      <ScreenHeader
-        title="Commande groupée"
-        right={
-          isOrganizer && isOpen ? (
-            <Pressable onPress={share} style={styles.shareBtn}>
-              <Text style={styles.shareText}>🔗 Partager</Text>
-            </Pressable>
-          ) : undefined
-        }
-      />
+      <ScreenHeader title="Commande groupée" />
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Statut + commerçant */}
         <Card>
           <Row style={{ justifyContent: "space-between", marginBottom: 8 }}>
-            <StatusBadge status={order.status} />
+            <Badge label={statusMeta.label} tone={statusMeta.tone} />
             {isOrganizer ? <Badge label="Organisateur" tone="brand" /> : null}
           </Row>
           <Text style={styles.title}>{order.title}</Text>
@@ -260,9 +260,14 @@ export default function OrderScreen() {
               <Badge label={`−${Math.round((1 - order.group_price / order.base_price) * 100)}%`} tone="accent" />
             </View>
           </Row>
-          <Text style={styles.depositLine}>
-            🔒 Caution remboursable : {formatPrice(order.deposit_amount)} (pré-autorisation, jamais débitée si vous venez chercher)
-          </Text>
+          <View style={styles.depositBox}>
+            <Text style={styles.depositLine}>
+              🔒 Caution remboursable : {formatPrice(order.deposit_amount)}
+            </Text>
+            <Text style={styles.depositHint}>
+              Pré-autorisation sur votre carte : jamais débitée si vous venez chercher votre commande.
+            </Text>
+          </View>
         </Card>
 
         {/* Progression */}
@@ -279,7 +284,7 @@ export default function OrderScreen() {
           <Text style={styles.pickupWhen}>🗓 {formatDateTime(order.pickup_at)} ({formatTime(order.pickup_at)})</Text>
           <Text style={styles.pickupWhere}>chez {merchant?.name ?? "le commerçant"} — {order.pickup_location}</Text>
           <Text style={styles.organizerLine}>
-            Organisé par <Text style={{ fontWeight: "700" }}>{profile && order.organizer_id === uid ? "vous" : "un voisin"}</Text>
+            Organisé par <Text style={{ fontWeight: "700", fontFamily: fonts.bold }}>{profile && order.organizer_id === uid ? "vous" : "un voisin"}</Text>
           </Text>
         </Card>
 
@@ -296,6 +301,7 @@ export default function OrderScreen() {
               title={`Rejoindre — ${formatPrice(order.group_price)} + ${formatPrice(order.deposit_amount)} de caution`}
               onPress={doJoin}
               loading={joining}
+              variant="accent"
             />
             <Text style={styles.joinHint}>
               Le paiement n'est prélevé que si le seuil est atteint. Sinon, rien n'est débité.
@@ -318,17 +324,39 @@ export default function OrderScreen() {
             {participants.length === 0 ? (
               <Text style={styles.organizerLine}>Aucun participant en attente de retrait.</Text>
             ) : (
-              participants.map((p) => (
-                <Pressable key={p.id} onPress={() => toggleNoShow(p.id)} style={styles.participantRow}>
-                  <Text style={styles.participantName}>
-                    {p.id === uid ? "Vous" : "Participant"}
-                    {p.deposit_amount > 0 ? ` · caution ${formatPrice(p.deposit_amount)}` : ""}
-                  </Text>
-                  <Text style={[styles.noShowLabel, noShowIds.has(p.id) && styles.noShowLabelActive]}>
-                    {noShowIds.has(p.id) ? "No-show (caution retenue)" : "Présent ✓"}
-                  </Text>
-                </Pressable>
-              ))
+              <>
+                <Text style={styles.noShowHint}>
+                  Appuyez sur un participant pour signaler une absence (no-show, caution retenue).
+                </Text>
+                {participants.map((p) => {
+                  const isNoShow = noShowIds.has(p.id);
+                  return (
+                    <Pressable
+                      key={p.id}
+                      onPress={() => toggleNoShow(p.id)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isNoShow }}
+                      style={({ pressed }) => [
+                        styles.participantRow,
+                        isNoShow && styles.participantRowNoShow,
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.participantName}>{p.id === uid ? "Vous" : "Participant"}</Text>
+                        {p.deposit_amount > 0 ? (
+                          <Text style={styles.participantDeposit}>Caution {formatPrice(p.deposit_amount)}</Text>
+                        ) : null}
+                      </View>
+                      <View style={[styles.presenceBadge, isNoShow && styles.presenceBadgeNoShow]}>
+                        <Text style={[styles.presenceText, isNoShow && styles.presenceTextNoShow]}>
+                          {isNoShow ? "Absent · caution retenue" : "Présent ✓"}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </>
             )}
             <Button title="Confirmer le retrait" onPress={doConfirmPickup} loading={confirming} disabled={participants.length === 0} />
           </View>
@@ -341,10 +369,10 @@ export default function OrderScreen() {
         ) : null}
 
         {isParticipant && order.status === "confirmed" ? (
-          <Card style={styles.card}>
+          <Card style={styles.card} tone="success">
             <Text style={styles.sectionLabel}>Votre participation</Text>
             <Text style={styles.organizerLine}>
-              Statut : <Badge label="Confirmée" tone="accent" />
+              Statut : <Badge label="Confirmée" tone="success" />
             </Text>
             <Text style={styles.joinHint}>
               Présentez-vous au retrait : votre caution sera libérée automatiquement à la confirmation.
@@ -353,7 +381,7 @@ export default function OrderScreen() {
         ) : null}
 
         {isParticipant && order.status === "completed" ? (
-          <Card style={styles.card}>
+          <Card style={styles.card} tone="success">
             <Text style={styles.sectionLabel}>Commande terminée 🎉</Text>
             <Text style={styles.organizerLine}>
               {myParticipation?.status === "no_show"
@@ -369,60 +397,60 @@ export default function OrderScreen() {
   );
 }
 
-function StatusBadge({ status }: { status: GroupOrder["status"] }) {
-  const map = {
-    open: { label: "Ouverte", tone: "brand" as const },
-    confirmed: { label: "Confirmée", tone: "accent" as const },
-    completed: { label: "Terminée", tone: "muted" as const },
-    cancelled: { label: "Annulée", tone: "danger" as const },
-  };
-  const st = map[status];
-  return <Badge label={st.label} tone={st.tone} />;
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg, padding: spacing.lg },
-  bigError: { fontSize: 15, color: colors.danger, textAlign: "center" },
+  bigError: { fontSize: fontSizes.body, color: colors.danger, textAlign: "center", fontFamily: fonts.medium },
   scroll: { paddingHorizontal: spacing.md, paddingTop: spacing.xs },
-  shareBtn: {
-    backgroundColor: colors.brand,
-    borderRadius: radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  shareText: { color: colors.onBrand, fontSize: 13, fontWeight: "700" },
   card: { marginTop: spacing.sm },
-  title: { fontSize: 19, fontWeight: "800", color: colors.text, lineHeight: 24 },
-  merchantLine: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
-  groupPrice: { fontSize: 26, fontWeight: "900", color: colors.accent },
-  perUnit: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  title: { fontSize: fontSizes.title, fontWeight: "800", color: colors.ink, lineHeight: lineHeights.title, fontFamily: fonts.extraBold },
+  merchantLine: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 4, fontFamily: fonts.regular },
+  groupPrice: { fontSize: 30, fontWeight: "900", color: colors.brand, fontFamily: fonts.extraBold },
+  perUnit: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
   priceRight: { alignItems: "flex-end", gap: 6 },
-  basePrice: { fontSize: 15, color: colors.textFaint, textDecorationLine: "line-through" },
-  depositLine: { fontSize: 12, color: colors.textMuted, marginTop: spacing.sm, lineHeight: 17 },
-  countdown: { fontSize: 12, color: colors.warning, marginTop: spacing.sm, fontWeight: "600" },
-  sectionLabel: { fontSize: 13, fontWeight: "700", color: colors.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
-  pickupWhen: { fontSize: 15, fontWeight: "700", color: colors.text },
-  pickupWhere: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
-  organizerLine: { fontSize: 13, color: colors.textMuted, marginTop: 6, lineHeight: 18 },
+  basePrice: { fontSize: fontSizes.body, color: colors.inkMuted, textDecorationLine: "line-through", fontFamily: fonts.medium },
+  depositBox: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.brandSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  depositLine: { fontSize: fontSizes.body, color: colors.ink, fontWeight: "700", fontFamily: fonts.bold },
+  depositHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 4, lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },
+  countdown: { fontSize: fontSizes.body, color: "#7A4E0E", marginTop: spacing.sm, fontWeight: "700", fontFamily: fonts.bold },
+  sectionLabel: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, marginBottom: 6, fontFamily: fonts.bold },
+  pickupWhen: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  pickupWhere: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 4, fontFamily: fonts.regular },
+  organizerLine: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 6, lineHeight: lineHeights.body, fontFamily: fonts.regular },
   errorBox: { marginTop: spacing.md, backgroundColor: colors.dangerSoft, borderRadius: radius.md, padding: spacing.md },
-  errorText: { color: colors.danger, fontSize: 13 },
+  errorText: { color: colors.danger, fontSize: fontSizes.body, fontFamily: fonts.medium },
   actions: { marginTop: spacing.md, gap: spacing.sm },
-  joinHint: { fontSize: 12, color: colors.textFaint, textAlign: "center", lineHeight: 17 },
-  needCardText: { fontSize: 13, color: colors.textMuted, textAlign: "center", lineHeight: 18 },
+  joinHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, textAlign: "center", lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },
+  needCardText: { fontSize: fontSizes.body, color: colors.inkMuted, textAlign: "center", lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  noShowHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginBottom: 4, lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },
   participantRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    minHeight: touch.secondary,
     backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: 12,
     marginBottom: spacing.sm,
   },
-  participantName: { fontSize: 14, fontWeight: "600", color: colors.text },
-  noShowLabel: { fontSize: 12, color: colors.accent, fontWeight: "700" },
-  noShowLabelActive: { color: colors.danger },
+  participantRowNoShow: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
+  participantName: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  participantDeposit: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
+  presenceBadge: {
+    backgroundColor: colors.success,
+    borderRadius: radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  presenceBadgeNoShow: { backgroundColor: colors.danger },
+  presenceText: { color: colors.ink, fontSize: fontSizes.bodySmall, fontWeight: "700", fontFamily: fonts.bold },
+  presenceTextNoShow: { color: colors.onBrand },
 });

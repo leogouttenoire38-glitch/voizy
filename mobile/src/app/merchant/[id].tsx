@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Button, Card, ScreenHeader } from "../../components/ui";
-import { colors, radius, spacing } from "../../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, shadow, spacing, touch } from "../../theme";
 import { supabase } from "../../lib/supabase";
 import { formatDistance, formatPrice } from "../../lib/format";
 import { MERCHANT_CATEGORY_LABELS } from "../../types";
@@ -83,6 +83,8 @@ export default function MerchantScreen() {
           offers.map((o) => (
             <Pressable
               key={o.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Offre ${o.title}, ${formatPrice(o.group_price)}`}
               style={({ pressed }) => [styles.offerCard, pressed && { opacity: 0.88 }]}
               onPress={() => router.push(`/new-order?merchantId=${merchant.id}&offerId=${o.id}`)}
             >
@@ -107,6 +109,7 @@ export default function MerchantScreen() {
             <Button
               title="Créer une commande groupée"
               onPress={() => router.push(`/new-order?merchantId=${merchant.id}`)}
+              variant="accent"
             />
             <Text style={styles.hint}>
               Choisissez une offre, fixez l'heure de retrait, puis partagez le lien à vos voisins.
@@ -132,35 +135,36 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number): numb
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg, padding: spacing.lg },
-  error: { fontSize: 15, color: colors.danger, textAlign: "center" },
+  error: { fontSize: fontSizes.body, color: colors.danger, textAlign: "center", fontFamily: fonts.medium },
   scroll: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: 60 },
-  category: { fontSize: 13, fontWeight: "700", color: colors.brand },
-  address: { fontSize: 13, color: colors.textMuted, marginTop: 6 },
-  description: { fontSize: 14, color: colors.text, lineHeight: 20, marginTop: 10 },
+  category: { fontSize: fontSizes.body, fontWeight: "700", color: colors.brand, fontFamily: fonts.bold },
+  address: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 6, fontFamily: fonts.regular },
+  description: { fontSize: fontSizes.body, color: colors.ink, lineHeight: lineHeights.body, marginTop: 10, fontFamily: fonts.regular },
   sectionLabel: {
-    fontSize: 13,
+    fontSize: fontSizes.heading,
     fontWeight: "700",
-    color: colors.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+    color: colors.ink,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
+    fontFamily: fonts.bold,
   },
-  muted: { fontSize: 13, color: colors.textMuted },
+  muted: { fontSize: fontSizes.body, color: colors.inkMuted, fontFamily: fonts.regular },
   offerCard: {
     flexDirection: "row",
+    minHeight: touch.secondary,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.lg,
     padding: spacing.md,
     marginBottom: spacing.sm,
+    ...shadow,
   },
-  offerTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
-  offerDesc: { fontSize: 12, color: colors.textMuted, marginTop: 3 },
+  offerTitle: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  offerDesc: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 3, fontFamily: fonts.regular },
   priceRow: { flexDirection: "row", alignItems: "baseline", marginTop: 8 },
-  groupPrice: { fontSize: 18, fontWeight: "900", color: colors.accent },
-  basePrice: { fontSize: 12, color: colors.textFaint, textDecorationLine: "line-through", marginLeft: 8 },
-  offerMeta: { fontSize: 12, color: colors.textMuted, marginLeft: 6 },
-  hint: { fontSize: 12, color: colors.textFaint, textAlign: "center", marginTop: spacing.sm, lineHeight: 17 },
+  groupPrice: { fontSize: fontSizes.title, fontWeight: "900", color: colors.brand, fontFamily: fonts.extraBold },
+  basePrice: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, textDecorationLine: "line-through", marginLeft: 8, fontFamily: fonts.medium },
+  offerMeta: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginLeft: 6, fontFamily: fonts.regular },
+  hint: { fontSize: fontSizes.body, color: colors.inkMuted, textAlign: "center", marginTop: spacing.sm, lineHeight: lineHeights.body, fontFamily: fonts.regular },
 });

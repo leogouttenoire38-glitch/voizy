@@ -11,7 +11,7 @@ import {
 import { useFocusEffect, useRouter } from "expo-router";
 import { EmptyState, ScreenHeader } from "../../components/ui";
 import { OrderCard } from "../../components/OrderCard";
-import { colors, radius, spacing } from "../../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import { formatDistance } from "../../lib/format";
@@ -80,8 +80,7 @@ export default function DiscoverScreen() {
         subtitle={profile?.neighborhood ?? undefined}
         right={
           <View style={styles.headerActions}>
-            <HeaderButton glyph="🔔" onPress={() => router.push("/notifications")} />
-            <HeaderButton glyph="+" onPress={() => router.push("/new-order")} accent />
+            <CreateButton onPress={() => router.push("/new-order")} />
           </View>
         }
       />
@@ -152,15 +151,15 @@ function MerchantChip({ merchant, onPress }: { merchant: NearbyMerchant; onPress
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Commerçant ${merchant.name}`}
       style={({ pressed }) => [styles.merchantCard, pressed && { opacity: 0.85 }]}
     >
       <Text style={styles.merchantEmoji}>🏪</Text>
       <Text style={styles.merchantName} numberOfLines={2}>
         {merchant.name}
       </Text>
-      <Text style={styles.merchantMeta}>
-        {MERCHANT_CATEGORY_LABELS[merchant.category] ?? ""}
-      </Text>
+      <Text style={styles.merchantMeta}>{MERCHANT_CATEGORY_LABELS[merchant.category] ?? ""}</Text>
       <Text style={styles.merchantMeta}>
         {merchant.distance_m != null ? `📍 ${formatDistance(merchant.distance_m)}` : ""}
         {merchant.active_offers > 0 ? ` · ${merchant.active_offers} offre${merchant.active_offers > 1 ? "s" : ""}` : ""}
@@ -169,10 +168,16 @@ function MerchantChip({ merchant, onPress }: { merchant: NearbyMerchant; onPress
   );
 }
 
-function HeaderButton({ glyph, onPress, accent }: { glyph: string; onPress: () => void; accent?: boolean }) {
+/** Bouton d'action principal de l'écran : icône + texte ensemble. */
+function CreateButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.headerBtn, accent && styles.headerBtnAccent]}>
-      <Text style={[styles.headerBtnText, accent && { color: colors.onBrand }]}>{glyph}</Text>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Créer une commande"
+      style={({ pressed }) => [styles.createBtn, pressed && { opacity: 0.85 }]}
+    >
+      <Text style={styles.createBtnText}>＋ Créer</Text>
     </Pressable>
   );
 }
@@ -180,21 +185,18 @@ function HeaderButton({ glyph, onPress, accent }: { glyph: string; onPress: () =
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: spacing.md, backgroundColor: colors.bg },
   headerActions: { flexDirection: "row", gap: 8 },
-  headerBtn: {
-    width: 40,
-    height: 40,
+  createBtn: {
+    minHeight: touch.icon,
     borderRadius: radius.full,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.brand,
+    paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
   },
-  headerBtnAccent: { backgroundColor: colors.brand, borderColor: colors.brand },
-  headerBtnText: { fontSize: 17, fontWeight: "700", color: colors.text },
+  createBtnText: { fontSize: fontSizes.body, fontWeight: "700", color: colors.onBrand, fontFamily: fonts.bold },
   listContent: { paddingBottom: 90 },
   errorBox: { padding: spacing.md, alignItems: "center" },
-  errorText: { color: colors.danger, textAlign: "center" },
+  errorText: { color: colors.danger, textAlign: "center", fontFamily: fonts.medium },
   sectionTitleRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -202,19 +204,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     marginBottom: spacing.sm,
   },
-  sectionTitle: { fontSize: 17, fontWeight: "800", color: colors.text },
-  sectionRight: { fontSize: 12, color: colors.textFaint },
+  sectionTitle: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold },
+  sectionRight: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, fontFamily: fonts.regular },
   merchantRow: { gap: spacing.sm, paddingBottom: spacing.xs },
   merchantCard: {
-    width: 150,
+    width: 160,
+    minHeight: 120,
     backgroundColor: colors.card,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
   },
-  merchantEmoji: { fontSize: 22 },
-  merchantName: { fontSize: 14, fontWeight: "700", color: colors.text, marginTop: 6, lineHeight: 18 },
-  merchantMeta: { fontSize: 11, color: colors.textMuted, marginTop: 3 },
-  noMerchants: { fontSize: 13, color: colors.textMuted, paddingVertical: spacing.sm },
+  merchantEmoji: { fontSize: 26 },
+  merchantName: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, marginTop: 6, lineHeight: lineHeights.body, fontFamily: fonts.bold },
+  merchantMeta: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 3, fontFamily: fonts.regular },
+  noMerchants: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, paddingVertical: spacing.sm, fontFamily: fonts.regular },
 });

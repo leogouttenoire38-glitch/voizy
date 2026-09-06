@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Button, Field, Screen } from "../components/ui";
-import { colors, radius, spacing } from "../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { geocodeAddress } from "../lib/api";
@@ -90,7 +90,7 @@ export default function OnboardingScreen() {
         value={address}
         onChangeText={setAddress}
         placeholder="Ex. : place d'Aligre, Paris 12e"
-        placeholderTextColor={colors.textFaint}
+        placeholderTextColor={colors.inkMuted}
         autoCapitalize="words"
         returnKeyType="search"
         onSubmitEditing={useAddress}
@@ -115,19 +115,19 @@ export default function OnboardingScreen() {
 
 const styles = StyleSheet.create({
   hero: { marginTop: 48, marginBottom: 32 },
-  logo: { fontSize: 34, fontWeight: "900", color: colors.brand, letterSpacing: 1 },
-  title: { fontSize: 24, fontWeight: "800", color: colors.text, marginTop: 16 },
-  subtitle: { fontSize: 14, color: colors.textMuted, lineHeight: 21, marginTop: 8 },
+  logo: { fontSize: 36, fontWeight: "900", color: colors.brand, letterSpacing: 1.5, fontFamily: fonts.extraBold },
+  title: { fontSize: fontSizes.title, fontWeight: "800", color: colors.ink, marginTop: 16, fontFamily: fonts.extraBold },
+  subtitle: { fontSize: fontSizes.body, color: colors.inkMuted, lineHeight: lineHeights.body, marginTop: 8, fontFamily: fonts.regular },
   divider: { flexDirection: "row", alignItems: "center", marginVertical: spacing.lg },
-  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
-  dividerText: { marginHorizontal: spacing.md, color: colors.textFaint, fontSize: 13 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.borderStrong },
+  dividerText: { marginHorizontal: spacing.md, color: colors.inkMuted, fontSize: fontSizes.body, fontFamily: fonts.medium },
   errorBox: {
     marginTop: spacing.md,
     backgroundColor: colors.dangerSoft,
     borderRadius: radius.md,
     padding: spacing.md,
   },
-  errorText: { color: colors.danger, fontSize: 13 },
+  errorText: { color: colors.danger, fontSize: fontSizes.body, fontFamily: fonts.medium },
   busyRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: spacing.md },
-  busyText: { color: colors.textMuted, fontSize: 13 },
+  busyText: { color: colors.inkMuted, fontSize: fontSizes.body, fontFamily: fonts.regular },
 });

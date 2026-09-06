@@ -67,6 +67,29 @@ const fmtWhen = (iso: string) =>
     minute: "2-digit",
   });
 
+/** Messages d'erreur en langage humain (miroir de mobile/src/lib/errors.ts). */
+function humanError(message: string | null | undefined, fallback: string): string {
+  const m = (message ?? "").toLowerCase();
+  if (!m) return fallback;
+  if (/invalid login credentials|invalid email or password/i.test(m))
+    return "E-mail ou mot de passe incorrect. Vérifiez puis réessayez.";
+  if (/email.*not.*confirm|confirm.*email|otp.*expired|expired token/i.test(m))
+    return "Le code n'est plus valide. Demandez un nouveau code.";
+  if (/invalid.*otp|invalid token|token has expired|code.*invalid/i.test(m))
+    return "Le code n'est pas valide. Vérifiez-le puis réessayez.";
+  if (/password.*(too short|weak)|at least 6/i.test(m))
+    return "Le mot de passe doit contenir au moins 6 caractères.";
+  if (/email.*not.*valid|invalid email/i.test(m))
+    return "Cette adresse e-mail ne semble pas valide. Vérifiez-la.";
+  if (/rate.limit|too many requests|over.*request/i.test(m))
+    return "Trop de demandes. Attendez un peu puis réessayez.";
+  if (/network|fetch|offline|failed to fetch/i.test(m))
+    return "Problème de connexion. Vérifiez votre réseau puis réessayez.";
+  if (/user.*not found/i.test(m))
+    return "Aucun compte trouvé avec cet e-mail. Créez un compte pour commencer.";
+  return message ?? fallback;
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -106,18 +129,18 @@ function Login({ onDone }: { onDone: () => void }) {
     setError(null);
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
-    if (err) setError(err.message);
+    if (err) setError(humanError(err.message, "Impossible de vous connecter. Réessayez."));
     else onDone();
   };
 
   const magicLink = async () => {
-    if (!email) return setError("Saisissez votre e-mail.");
+    if (!email) return setError("Renseignez d'abord votre e-mail.");
     setBusy(true);
     setError(null);
     const { error: err } = await supabase.auth.signInWithOtp({ email });
     setBusy(false);
-    if (err) setError(err.message);
-    else setNotice("Lien magique envoyé ✉️");
+    if (err) setError(humanError(err.message, "Impossible d'envoyer le code. Réessayez."));
+    else setNotice("Code envoyé par e-mail ✉️");
   };
 
   return (
@@ -125,15 +148,33 @@ function Login({ onDone }: { onDone: () => void }) {
       <div className="card login-card">
         <h1 className="logo">VOIZY</h1>
         <p className="tagline">Back-office commerçant</p>
-        <input type="email" placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input type="password" placeholder="Mot de passe" value={password} onChange={(e) => setPassword(e.target.value)} />
-        {error ? <p className="error">{error}</p> : null}
+        <div className="field-group">
+          <label className="field-label" htmlFor="login-email">E-mail</label>
+          <input
+            id="login-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="login-password">Mot de passe</label>
+          <input
+            id="login-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
+        {error ? <p className="error" role="alert">{error}</p> : null}
         {notice ? <p className="notice">{notice}</p> : null}
         <button className="primary" onClick={signIn} disabled={busy}>
           {busy ? "…" : "Se connecter"}
         </button>
         <button className="ghost" onClick={magicLink} disabled={busy}>
-          Recevoir un lien magique
+          Recevoir un code par e-mail
         </button>
       </div>
     </div>
@@ -232,7 +273,7 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
     ]);
     if (!statsRes.error) setStats((statsRes.data as MerchantStats | null) ?? null);
     if (!commRes.error) setComm((commRes.data as CommissionSummary | null) ?? null);
-    if (ordersRes.error) setError(ordersRes.error.message);
+    if (ordersRes.error) setError(humanError(ordersRes.error.message, "Impossible de charger les commandes."));
     else setOrders((ordersRes.data as OrderRow[]) ?? []);
     setLoading(false);
   }, [merchant.id]);

@@ -3,7 +3,7 @@ import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Tex
 import { useFocusEffect, useRouter } from "expo-router";
 import { EmptyState, ScreenHeader } from "../../components/ui";
 import { MyOrderCard } from "../../components/MyOrderCard";
-import { colors, spacing } from "../../theme";
+import { colors, fonts, fontSizes, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import type { GroupOrder, Participation } from "../../types";
@@ -66,7 +66,7 @@ export default function OrdersScreen() {
         title="Mes commandes"
         subtitle="Organisées ou rejointes"
         right={
-          <AddButton onPress={() => router.push("/new-order")} />
+          <CreateButton onPress={() => router.push("/new-order")} />
         }
       />
 
@@ -102,10 +102,16 @@ export default function OrdersScreen() {
   );
 }
 
-function AddButton({ onPress }: { onPress: () => void }) {
+/** Bouton d'action principal de l'écran : icône + texte ensemble. */
+function CreateButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={styles.addBtnWrap}>
-      <Text style={styles.addBtn}>＋</Text>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Créer une commande"
+      style={({ pressed }) => [styles.createBtn, pressed && { opacity: 0.85 }]}
+    >
+      <Text style={styles.createBtnText}>＋ Créer</Text>
     </Pressable>
   );
 }
@@ -113,14 +119,14 @@ function AddButton({ onPress }: { onPress: () => void }) {
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: spacing.md, backgroundColor: colors.bg },
   listContent: { paddingBottom: 90 },
-  hint: { fontSize: 12, color: colors.textFaint, marginBottom: spacing.sm },
-  addBtnWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
+  hint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginBottom: spacing.sm, fontFamily: fonts.regular },
+  createBtn: {
+    minHeight: touch.icon,
+    borderRadius: radius.full,
     backgroundColor: colors.brand,
+    paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
   },
-  addBtn: { fontSize: 20, fontWeight: "700", color: colors.onBrand },
+  createBtnText: { fontSize: fontSizes.body, fontWeight: "700", color: colors.onBrand, fontFamily: fonts.bold },
 });

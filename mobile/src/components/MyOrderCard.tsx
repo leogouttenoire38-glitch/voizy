@@ -1,14 +1,15 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { colors, radius, spacing } from "../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, shadow, spacing } from "../theme";
 import { countdown, formatDateTime, formatPrice } from "../lib/format";
 import type { GroupOrder } from "../types";
-import { Badge } from "./ui";
+import { Badge, type BadgeTone } from "./ui";
 
-const STATUS_LABEL: Record<string, { label: string; tone: "brand" | "accent" | "danger" | "warning" | "muted" }> = {
+// Vocabulaire figé : « En cours » = commande ouverte, partout dans l'app.
+const STATUS_LABEL: Record<string, { label: string; tone: BadgeTone }> = {
   open: { label: "En cours", tone: "brand" },
-  confirmed: { label: "Confirmée", tone: "accent" },
+  confirmed: { label: "Confirmée", tone: "success" },
   completed: { label: "Terminée", tone: "muted" },
   cancelled: { label: "Annulée", tone: "danger" },
 };
@@ -30,6 +31,8 @@ export function MyOrderCard({
     <Pressable
       style={({ pressed }) => [styles.card, pressed && { opacity: 0.88 }]}
       onPress={() => router.push(`/order/${order.id}`)}
+      accessibilityRole="button"
+      accessibilityLabel={`Commande ${order.title}, ${st.label}`}
     >
       <View style={styles.topRow}>
         <Badge label={isOrganizer ? "Organisateur" : "Participant"} tone={isOrganizer ? "brand" : "muted"} />
@@ -61,16 +64,17 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.md,
     marginBottom: spacing.sm,
+    ...shadow,
   },
   topRow: { flexDirection: "row", gap: 8 },
-  title: { fontSize: 16, fontWeight: "800", color: colors.text, marginTop: 8, lineHeight: 21 },
-  merchant: { fontSize: 13, color: colors.textMuted, marginTop: 3 },
+  title: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.ink, marginTop: 8, lineHeight: lineHeights.heading, fontFamily: fonts.extraBold },
+  merchant: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 3, fontFamily: fonts.regular },
   metaRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginTop: spacing.sm,
   },
-  meta: { fontSize: 12, color: colors.textMuted },
-  price: { fontSize: 15, fontWeight: "800", color: colors.accent },
+  meta: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, fontFamily: fonts.regular },
+  price: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.brand, fontFamily: fonts.extraBold },
 });

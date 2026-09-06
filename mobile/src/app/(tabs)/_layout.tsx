@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { Redirect, Tabs } from "expo-router";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
-import { colors } from "../../theme";
+import { colors, fontSizes, fonts } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { registerPushToken } from "../../lib/push";
 
@@ -36,7 +36,8 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.brand,
-        tabBarInactiveTintColor: colors.textFaint,
+        tabBarInactiveTintColor: colors.inkMuted,
+        tabBarLabelStyle: { fontSize: fontSizes.caption, fontFamily: fonts.semiBold },
         tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
       }}
     >
@@ -52,6 +53,13 @@ export default function TabsLayout() {
         options={{
           title: "Mes commandes",
           tabBarIcon: ({ color }) => <TabIcon glyph="📦" active={color === colors.brand} />,
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: "Notifications",
+          tabBarIcon: ({ color }) => <TabIcon glyph="🔔" active={color === colors.brand} />,
         }}
       />
       <Tabs.Screen

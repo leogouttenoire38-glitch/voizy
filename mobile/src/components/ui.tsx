@@ -12,12 +12,30 @@ import {
   ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { colors, radius, shadow, spacing } from "../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, shadow, spacing, touch } from "../theme";
 
 // ---------------------------------------------------------------------------
-// Button
+// Button — zones tactiles ≥ 56 dp (primaire) / 48 dp (secondaire)
 // ---------------------------------------------------------------------------
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "outline";
+type ButtonVariant = "primary" | "accent" | "secondary" | "ghost" | "danger" | "outline";
+
+const VARIANT_BG: Record<ButtonVariant, string> = {
+  primary: colors.brand,
+  accent: colors.accent,
+  secondary: colors.brandSoft,
+  ghost: "transparent",
+  danger: colors.danger,
+  outline: colors.card,
+};
+
+const VARIANT_FG: Record<ButtonVariant, string> = {
+  primary: colors.onBrand,
+  accent: colors.onAccent, // jamais de blanc sur Ocre (2,7:1) — encre (5,1:1)
+  secondary: colors.brand,
+  ghost: colors.inkMuted,
+  danger: colors.onBrand,
+  outline: colors.brand,
+};
 
 export function Button({
   title,
@@ -34,36 +52,23 @@ export function Button({
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
-  const bg =
-    variant === "primary"
-      ? colors.brand
-      : variant === "secondary"
-        ? colors.brandSoft
-        : variant === "danger"
-          ? colors.danger
-          : variant === "outline"
-            ? colors.card
-            : "transparent";
-  const fg =
-    variant === "primary"
-      ? colors.onBrand
-      : variant === "danger"
-        ? colors.onBrand
-        : variant === "outline"
-          ? colors.brand
-          : variant === "ghost"
-            ? colors.textMuted
-            : colors.brand;
-
   const isDisabled = disabled || loading;
+  const fg = VARIANT_FG[variant];
   return (
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: bg, borderColor: variant === "outline" ? colors.border : "transparent" },
-        pressed && !isDisabled && styles.buttonPressed,
+        variant === "primary" && styles.buttonPrimary,
+        variant === "accent" && styles.buttonAccent,
+        variant === "danger" && styles.buttonDanger,
+        variant === "outline" && styles.buttonOutline,
+        { backgroundColor: VARIANT_BG[variant] },
+        pressed && !isDisabled && variant === "primary" && styles.buttonPrimaryPressed,
+        pressed && !isDisabled && { opacity: 0.88 },
         isDisabled && styles.buttonDisabled,
         style,
       ]}
@@ -78,7 +83,7 @@ export function Button({
 }
 
 // ---------------------------------------------------------------------------
-// Chip (filtre / choix)
+// Chip (filtre / choix) — ≥ 48 dp de hauteur
 // ---------------------------------------------------------------------------
 export function Chip({
   label,
@@ -95,6 +100,9 @@ export function Chip({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
       style={({ pressed }) => [
         styles.chip,
         selected && styles.chipSelected,
@@ -108,7 +116,7 @@ export function Chip({
 }
 
 // ---------------------------------------------------------------------------
-// Field (label + TextInput)
+// Field — label toujours visible au-dessus du champ
 // ---------------------------------------------------------------------------
 export function Field({
   label,
@@ -120,7 +128,7 @@ export function Field({
     <View style={styles.fieldWrap}>
       {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
       <TextInput
-        placeholderTextColor={colors.textFaint}
+        placeholderTextColor={colors.inkMuted}
         style={[styles.field, multiline && styles.fieldMultiline, error && styles.fieldError]}
         multiline={multiline}
         {...props}
@@ -133,8 +141,18 @@ export function Field({
 // ---------------------------------------------------------------------------
 // Card
 // ---------------------------------------------------------------------------
-export function Card({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+export function Card({ children, style, tone }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; tone?: "plain" | "success" }) {
+  return (
+    <View
+      style={[
+        styles.card,
+        tone === "success" && { backgroundColor: colors.success, borderColor: colors.success },
+        style,
+      ]}
+    >
+      {children}
+    </View>
+  );
 }
 
 export function Row({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
@@ -157,32 +175,48 @@ export function ScreenHeader({ title, subtitle, right }: { title: string; subtit
 }
 
 // ---------------------------------------------------------------------------
+// Indicateur d'étape (« Étape 2 sur 3 ») — une seule décision par écran
+// ---------------------------------------------------------------------------
+export function ProgressSteps({ current, total }: { current: number; total: number }) {
+  return (
+    <View style={styles.stepsWrap} accessibilityLabel={`Étape ${current} sur ${total}`}>
+      <Text style={styles.stepsLabel}>
+        Étape {current} sur {total}
+      </Text>
+      <View style={styles.stepsTrack}>
+        {Array.from({ length: total }, (_, i) => (
+          <View key={i} style={[styles.stepDot, i < current && styles.stepDotDone]} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Badge de statut
 // ---------------------------------------------------------------------------
-export function Badge({ label, tone = "brand" }: { label: string; tone?: "brand" | "accent" | "danger" | "warning" | "muted" }) {
-  const bg =
-    tone === "accent"
-      ? colors.accentSoft
-      : tone === "danger"
-        ? colors.dangerSoft
-        : tone === "warning"
-          ? colors.warningSoft
-          : tone === "muted"
-            ? "#F1F1F6"
-            : colors.brandSoft;
-  const fg =
-    tone === "accent"
-      ? colors.accent
-      : tone === "danger"
-        ? colors.danger
-        : tone === "warning"
-          ? colors.warning
-          : tone === "muted"
-            ? colors.textMuted
-            : colors.brand;
+export type BadgeTone = "brand" | "accent" | "danger" | "success" | "muted";
+
+const BADGE_BG: Record<BadgeTone, string> = {
+  brand: colors.brandSoft,
+  accent: colors.accentSoft,
+  danger: colors.dangerSoft,
+  success: colors.success,
+  muted: "#E7E2D8",
+};
+
+const BADGE_FG: Record<BadgeTone, string> = {
+  brand: colors.brand,
+  accent: "#7A4E0E",
+  danger: colors.danger,
+  success: colors.ink,
+  muted: colors.inkMuted,
+};
+
+export function Badge({ label, tone = "brand" }: { label: string; tone?: BadgeTone }) {
   return (
-    <View style={[styles.badge, { backgroundColor: bg }]}>
-      <Text style={[styles.badgeText, { color: fg }]}>{label}</Text>
+    <View style={[styles.badge, { backgroundColor: BADGE_BG[tone] }]}>
+      <Text style={[styles.badgeText, { color: BADGE_FG[tone] }]}>{label}</Text>
     </View>
   );
 }
@@ -228,45 +262,58 @@ export function Screen({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   screen: { flex: 1, paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+
   button: {
-    minHeight: 48,
+    minHeight: touch.primary,
     borderRadius: radius.md,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
     borderWidth: 1,
+    borderColor: "transparent",
   },
-  buttonPressed: { opacity: 0.85 },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: { fontSize: 15, fontWeight: "600" },
+  buttonPrimary: { borderColor: colors.brand },
+  buttonPrimaryPressed: { backgroundColor: colors.brandPressed },
+  buttonAccent: { borderColor: colors.accent },
+  buttonDanger: { borderColor: colors.danger },
+  buttonOutline: { borderColor: colors.borderStrong },
+  buttonDisabled: { opacity: 0.45 },
+  buttonText: { fontSize: fontSizes.body, fontWeight: "700", fontFamily: fonts.bold, lineHeight: fontSizes.body + 4 },
+
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     backgroundColor: colors.card,
+    justifyContent: "center",
   },
   chipSelected: { backgroundColor: colors.brand, borderColor: colors.brand },
   chipPressed: { opacity: 0.8 },
-  chipText: { fontSize: 13, color: colors.textMuted },
-  chipTextSelected: { color: colors.onBrand, fontWeight: "600" },
+  chipText: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, fontFamily: fonts.medium },
+  chipTextSelected: { color: colors.onBrand, fontWeight: "700", fontFamily: fonts.bold },
+
   fieldWrap: { marginBottom: spacing.md },
-  fieldLabel: { fontSize: 13, fontWeight: "600", color: colors.textMuted, marginBottom: 6 },
+  fieldLabel: { fontSize: fontSizes.body, fontWeight: "600", color: colors.ink, marginBottom: 6, fontFamily: fonts.semiBold },
   field: {
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
     backgroundColor: colors.card,
     borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: colors.text,
-    minHeight: 46,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: fontSizes.body,
+    color: colors.ink,
+    minHeight: 56,
+    fontFamily: fonts.regular,
   },
-  fieldMultiline: { minHeight: 90, textAlignVertical: "top" },
+  fieldMultiline: { minHeight: 110, textAlignVertical: "top" },
   fieldError: { borderColor: colors.danger },
-  fieldErrorText: { color: colors.danger, fontSize: 12, marginTop: 4 },
+  fieldErrorText: { color: colors.danger, fontSize: fontSizes.bodySmall, marginTop: 4, fontFamily: fonts.medium },
+
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,
@@ -275,14 +322,24 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     ...shadow,
   },
+
   row: { flexDirection: "row", alignItems: "center" },
+
   header: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md, marginTop: spacing.sm },
-  headerTitle: { fontSize: 26, fontWeight: "800", color: colors.text, letterSpacing: -0.4 },
-  headerSubtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
-  badgeText: { fontSize: 12, fontWeight: "700" },
+  headerTitle: { fontSize: fontSizes.display, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold, lineHeight: lineHeights.display },
+  headerSubtitle: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
+
+  stepsWrap: { marginBottom: spacing.md },
+  stepsLabel: { fontSize: fontSizes.bodySmall, fontWeight: "700", color: colors.brand, fontFamily: fonts.bold, marginBottom: 6 },
+  stepsTrack: { flexDirection: "row", gap: 6 },
+  stepDot: { flex: 1, height: 6, borderRadius: radius.full, backgroundColor: colors.border },
+  stepDotDone: { backgroundColor: colors.brand },
+
+  badge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full, alignSelf: "flex-start" },
+  badgeText: { fontSize: fontSizes.bodySmall, fontWeight: "700", fontFamily: fonts.bold },
+
   empty: { alignItems: "center", paddingVertical: 48, paddingHorizontal: spacing.lg },
-  emptyIcon: { fontSize: 40, marginBottom: spacing.sm },
-  emptyTitle: { fontSize: 16, fontWeight: "700", color: colors.text, textAlign: "center" },
-  emptyHint: { fontSize: 13, color: colors.textMuted, textAlign: "center", marginTop: 6, lineHeight: 19 },
+  emptyIcon: { fontSize: 44, marginBottom: spacing.sm },
+  emptyTitle: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, textAlign: "center", fontFamily: fonts.bold },
+  emptyHint: { fontSize: fontSizes.body, color: colors.inkMuted, textAlign: "center", marginTop: 8, lineHeight: lineHeights.body, fontFamily: fonts.regular },
 });

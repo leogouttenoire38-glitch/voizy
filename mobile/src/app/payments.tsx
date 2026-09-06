@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Button, Card, Screen, ScreenHeader } from "../components/ui";
-import { colors, spacing } from "../theme";
+import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme";
 import { setupPaymentStatus } from "../lib/api";
 import { startCardSetup } from "../lib/checkout";
 
@@ -75,26 +75,33 @@ export default function PaymentsScreen() {
         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       </Card>
 
-      <Text style={styles.legal}>
-        Paiements sécurisés via Stripe. La caution est une pré-autorisation : elle n'est débitée
-        qu'en cas de no-show au retrait (CGV Voizy).
-      </Text>
+      <View style={styles.legalBox}>
+        <Text style={styles.legal}>
+          Paiements sécurisés via Stripe. La caution est une pré-autorisation : elle n'est débitée
+          qu'en cas de no-show au retrait (CGV Voizy).
+        </Text>
+      </View>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
   okRow: { flexDirection: "row", alignItems: "center" },
-  okIcon: { fontSize: 26, marginRight: spacing.md },
-  okTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
-  okHint: { fontSize: 12, color: colors.textMuted, marginTop: 4, lineHeight: 17 },
-  hint: { fontSize: 13, color: colors.textMuted, lineHeight: 19 },
-  notice: { color: colors.accent, fontSize: 13, marginTop: spacing.md, fontWeight: "600" },
-  legal: {
-    fontSize: 12,
-    color: colors.textFaint,
-    lineHeight: 17,
+  okIcon: { fontSize: 30, marginRight: spacing.md },
+  okTitle: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  okHint: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 4, lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  hint: { fontSize: fontSizes.body, color: colors.inkMuted, lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  notice: { color: colors.brand, fontSize: fontSizes.body, marginTop: spacing.md, fontWeight: "700", fontFamily: fonts.bold },
+  legalBox: {
     marginTop: spacing.md,
-    paddingHorizontal: spacing.xs,
+    backgroundColor: colors.success,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  legal: {
+    fontSize: fontSizes.bodySmall,
+    color: colors.ink,
+    lineHeight: lineHeights.bodySmall,
+    fontFamily: fonts.regular,
   },
 });

@@ -2,12 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Button, Screen } from "../../components/ui";
-import { colors, spacing } from "../../theme";
+import { colors, fonts, fontSizes, lineHeights, spacing } from "../../theme";
+import { humanAuthError } from "../../lib/errors";
 import { supabase } from "../../lib/supabase";
 
 // Écran de vérification par code e-mail (OTP) : aucune URL de confirmation n'est
 // envoyée — l'utilisateur saisit le code à 6 chiffres reçu dans sa boîte mail.
 // type = "signup" (création de compte) | "email" (connexion par code).
+const RESEND_WAIT = 30; // secondes avant de pouvoir renvoyer un code
+
 export default function VerifyEmailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ email?: string; type?: string }>();
@@ -18,6 +21,7 @@ export default function VerifyEmailScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
+  const [wait, setWait] = useState(0);
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -25,16 +29,23 @@ export default function VerifyEmailScreen() {
     return () => clearTimeout(t);
   }, []);
 
+  // Compte à rebours avant de pouvoir renvoyer un code.
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setInterval(() => setWait((w) => Math.max(0, w - 1)), 1000);
+    return () => clearInterval(t);
+  }, [wait]);
+
   const doVerify = async () => {
     const token = code.trim();
     if (!/^\d{6}$/.test(token)) {
-      return setError("Saisissez le code à 6 chiffres reçu par e-mail.");
+      return setError("Saisissez les 6 chiffres du code reçu par e-mail.");
     }
     setBusy(true);
     setError(null);
     const { error: err } = await supabase.auth.verifyOtp({ email, token, type });
     setBusy(false);
-    if (err) return setError(err.message);
+    if (err) return setError(humanAuthError(err.message, "Le code n'est pas valide. Réessayez."));
     // Session ouverte : le layout aiguille vers /onboarding si le quartier
     // n'est pas encore choisi, sinon vers les onglets.
     router.replace(type === "signup" ? "/onboarding" : "/");
@@ -49,9 +60,10 @@ export default function VerifyEmailScreen() {
         ? await supabase.auth.resend({ type: "signup", email })
         : await supabase.auth.signInWithOtp({ email });
     setBusy(false);
-    if (res.error) return setError(res.error.message);
+    if (res.error) return setError(humanAuthError(res.error.message, "Impossible d'envoyer un nouveau code."));
     setResent(true);
     setCode("");
+    setWait(RESEND_WAIT);
   };
 
   return (
@@ -65,14 +77,16 @@ export default function VerifyEmailScreen() {
           </Text>
         </View>
 
+        <Text style={styles.codeLabel}>Votre code à 6 chiffres</Text>
         <TextInput
           ref={inputRef}
           value={code}
           onChangeText={(t) => setCode(t.replace(/[^0-9]/g, "").slice(0, 6))}
           keyboardType="number-pad"
           autoFocus
+          accessibilityLabel="Code à 6 chiffres reçu par e-mail"
           placeholder="••••••"
-          placeholderTextColor={colors.textFaint}
+          placeholderTextColor={colors.inkMuted}
           style={[styles.codeInput, error && styles.codeInputError]}
           onSubmitEditing={doVerify}
         />
@@ -82,31 +96,39 @@ export default function VerifyEmailScreen() {
 
         <Button title="Vérifier le code" onPress={doVerify} loading={busy} />
         <View style={{ height: spacing.sm }} />
-        <Button title="Renvoyer le code" onPress={doResend} variant="secondary" disabled={busy} />
+        <Button
+          title={wait > 0 ? `Renvoyer le code (${wait} s)` : "Renvoyer le code"}
+          onPress={doResend}
+          variant="secondary"
+          disabled={busy || wait > 0}
+        />
       </KeyboardAvoidingView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: { marginTop: 32, marginBottom: 28 },
-  title: { fontSize: 26, fontWeight: "800", color: colors.text, letterSpacing: -0.4 },
-  subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 6, lineHeight: 20 },
-  email: { color: colors.brand, fontWeight: "600" },
+  hero: { marginTop: 32, marginBottom: 24 },
+  title: { fontSize: fontSizes.display, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold, lineHeight: lineHeights.display },
+  subtitle: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 6, lineHeight: lineHeights.body, fontFamily: fonts.regular },
+  email: { color: colors.brand, fontWeight: "700", fontFamily: fonts.bold },
+  codeLabel: { fontSize: fontSizes.body, fontWeight: "600", color: colors.ink, marginBottom: 6, fontFamily: fonts.semiBold },
   codeInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
     backgroundColor: colors.card,
     borderRadius: 12,
-    paddingVertical: 14,
-    fontSize: 28,
+    minHeight: 72,
+    paddingVertical: 12,
+    fontSize: 34,
     fontWeight: "700",
-    letterSpacing: 12,
+    fontFamily: fonts.bold,
+    letterSpacing: 16,
     textAlign: "center",
-    color: colors.text,
+    color: colors.ink,
     marginBottom: spacing.md,
   },
   codeInputError: { borderColor: colors.danger },
-  error: { color: colors.danger, fontSize: 13, marginBottom: spacing.sm },
-  notice: { color: colors.accent, fontSize: 13, marginBottom: spacing.sm },
+  error: { color: colors.danger, fontSize: fontSizes.body, marginBottom: spacing.sm, fontFamily: fonts.medium },
+  notice: { color: colors.brand, fontSize: fontSizes.body, marginBottom: spacing.sm, fontFamily: fonts.semiBold },
 });

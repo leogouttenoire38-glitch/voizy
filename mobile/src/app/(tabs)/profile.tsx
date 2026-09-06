@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Button, Card, Row, Screen, ScreenHeader } from "../../components/ui";
-import { colors, radius, spacing } from "../../theme";
+import { colors, fonts, fontSizes, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import { setupPaymentStatus } from "../../lib/api";
@@ -55,7 +55,7 @@ export default function ProfileScreen() {
       <Text style={styles.section}>Mes réglages</Text>
 
       <MenuItem
-        label="Quartier & géolocalisation"
+        label="Quartier et géolocalisation"
         hint={profile.neighborhood ?? "Non défini"}
         onPress={() => router.push("/onboarding")}
       />
@@ -72,7 +72,7 @@ export default function ProfileScreen() {
 
       <View style={{ height: spacing.lg }} />
       <Button title="Se déconnecter" variant="danger" onPress={signOut} />
-      <Text style={styles.version}>Voizy MVP · v0.1.0</Text>
+      <Text style={styles.version}>Voizy · v0.1.0</Text>
     </Screen>
   );
 }
@@ -93,6 +93,7 @@ function PressableRow({ children, onPress }: { children: React.ReactNode; onPres
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
       style={({ pressed }) => [styles.menuRow, pressed && { backgroundColor: colors.brandSoft }]}
     >
       {children}
@@ -103,38 +104,38 @@ function PressableRow({ children, onPress }: { children: React.ReactNode; onPres
 const styles = StyleSheet.create({
   card: { flexDirection: "row", alignItems: "center" },
   avatar: {
-    width: 52,
-    height: 52,
+    width: 60,
+    height: 60,
     borderRadius: radius.full,
     backgroundColor: colors.brandSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarText: { fontSize: 20, fontWeight: "800", color: colors.brand },
-  name: { fontSize: 17, fontWeight: "800", color: colors.text },
-  muted: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  avatarText: { fontSize: 24, fontWeight: "800", color: colors.brand, fontFamily: fonts.extraBold },
+  name: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold },
+  muted: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
   section: {
-    fontSize: 13,
+    fontSize: fontSizes.heading,
     fontWeight: "700",
-    color: colors.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
+    color: colors.ink,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
+    fontFamily: fonts.bold,
   },
   menuRow: {
     flexDirection: "row",
     alignItems: "center",
+    minHeight: touch.primary,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 14,
+    paddingVertical: 12,
     marginBottom: spacing.sm,
   },
-  menuLabel: { fontSize: 15, fontWeight: "600", color: colors.text },
-  menuHint: { fontSize: 12, color: colors.textFaint, marginTop: 2 },
-  chevron: { fontSize: 20, color: colors.textFaint, marginLeft: spacing.sm },
-  version: { textAlign: "center", color: colors.textFaint, fontSize: 12, marginTop: spacing.lg },
+  menuLabel: { fontSize: fontSizes.body, fontWeight: "600", color: colors.ink, fontFamily: fonts.semiBold },
+  menuHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
+  chevron: { fontSize: 24, color: colors.inkMuted, marginLeft: spacing.sm, fontFamily: fonts.regular },
+  version: { textAlign: "center", color: colors.inkMuted, fontSize: fontSizes.bodySmall, marginTop: spacing.lg, fontFamily: fonts.regular },
 });
