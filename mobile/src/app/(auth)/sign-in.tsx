@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { Link, useRouter } from "expo-router";
-import { Button, Field, Screen } from "../../components/ui";
+import { BackButton, Button, Field, Screen } from "../../components/ui";
 import { colors, fonts, fontSizes, lineHeights, spacing } from "../../theme";
 import { humanAuthError } from "../../lib/errors";
 import { supabase } from "../../lib/supabase";
@@ -40,6 +40,7 @@ export default function SignInScreen() {
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <View style={styles.hero}>
+          <BackButton />
           <Text style={styles.logo}>VOIZY</Text>
           <Text style={styles.tagline}>
             Achetez groupé entre voisins,{"\n"}chez les commerçants du quartier.

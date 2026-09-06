@@ -40,7 +40,7 @@ export default function PaymentsScreen() {
 
   return (
     <Screen>
-      <ScreenHeader title="Paiement" subtitle="Carte utilisée pour les commandes groupées et les cautions" />
+      <ScreenHeader title="Paiement" subtitle="Carte utilisée pour les commandes groupées et les cautions" back />
       <Card>
         {status === "loading" ? (
           <ActivityIndicator color={colors.brand} style={{ marginVertical: spacing.md }} />

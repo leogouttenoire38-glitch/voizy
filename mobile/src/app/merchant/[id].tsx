@@ -63,7 +63,7 @@ export default function MerchantScreen() {
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title={merchant.name} />
+      <ScreenHeader title={merchant.name} back />
       <ScrollView contentContainerStyle={styles.scroll}>
         <Card>
           <Text style={styles.category}>

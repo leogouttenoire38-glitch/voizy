@@ -11,8 +11,30 @@ import {
   View,
   ViewStyle,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, fonts, fontSizes, lineHeights, radius, shadow, spacing, touch } from "../theme";
+
+// ---------------------------------------------------------------------------
+// BackButton — flèche « ← Retour » en haut à gauche, jamais d'icône seule
+// ---------------------------------------------------------------------------
+export function BackButton() {
+  const router = useRouter();
+  return (
+    <Pressable
+      onPress={() => {
+        if (router.canGoBack()) router.back();
+        else router.replace("/");
+      }}
+      accessibilityRole="button"
+      accessibilityLabel="Revenir à l'écran précédent"
+      hitSlop={8}
+      style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+    >
+      <Text style={styles.backBtnText}>← Retour</Text>
+    </Pressable>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Button — zones tactiles ≥ 56 dp (primaire) / 48 dp (secondaire)
@@ -160,12 +182,13 @@ export function Row({ children, style }: { children: React.ReactNode; style?: St
 }
 
 // ---------------------------------------------------------------------------
-// Header de page (grand titre + sous-titre)
+// Header de page (grand titre + sous-titre + flèche retour optionnelle)
 // ---------------------------------------------------------------------------
-export function ScreenHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: React.ReactNode }) {
+export function ScreenHeader({ title, subtitle, right, back }: { title: string; subtitle?: string; right?: React.ReactNode; back?: boolean }) {
   return (
     <View style={styles.header}>
-      <View style={{ flex: 1 }}>
+      {back ? <BackButton /> : null}
+      <View style={{ flex: 1, marginLeft: back ? spacing.sm : 0 }}>
         <Text style={styles.headerTitle}>{title}</Text>
         {subtitle ? <Text style={styles.headerSubtitle}>{subtitle}</Text> : null}
       </View>
@@ -328,6 +351,20 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md, marginTop: spacing.sm },
   headerTitle: { fontSize: fontSizes.display, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold, lineHeight: lineHeights.display },
   headerSubtitle: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 2, fontFamily: fonts.regular },
+
+  backBtn: {
+    minHeight: touch.icon,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+  },
+  backBtnPressed: { opacity: 0.75 },
+  backBtnText: { fontSize: fontSizes.body, fontWeight: "700", color: colors.brand, fontFamily: fonts.bold },
 
   stepsWrap: { marginBottom: spacing.md },
   stepsLabel: { fontSize: fontSizes.bodySmall, fontWeight: "700", color: colors.brand, fontFamily: fonts.bold, marginBottom: 6 },

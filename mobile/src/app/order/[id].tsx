@@ -235,7 +235,7 @@ export default function OrderScreen() {
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="Commande groupée" />
+      <ScreenHeader title="Commande groupée" back />
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Statut + commerçant */}
         <Card>

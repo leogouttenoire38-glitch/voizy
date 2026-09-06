@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Button, Field, Screen } from "../components/ui";
+import { BackButton, Button, Field, Screen } from "../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
@@ -65,6 +65,7 @@ export default function OnboardingScreen() {
   return (
     <Screen>
       <View style={styles.hero}>
+        <BackButton />
         <Text style={styles.logo}>VOIZY</Text>
         <Text style={styles.title}>Votre quartier ?</Text>
         <Text style={styles.subtitle}>

@@ -206,7 +206,7 @@ export default function NewOrderScreen() {
 
   return (
     <Screen>
-      <ScreenHeader title="Nouvelle commande" subtitle="Achetez groupé chez un commerçant du quartier" />
+      <ScreenHeader title="Nouvelle commande" subtitle="Achetez groupé chez un commerçant du quartier" back />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <ProgressSteps current={step} total={3} />
 

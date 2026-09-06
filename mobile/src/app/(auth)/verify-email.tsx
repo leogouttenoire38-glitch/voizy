@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Button, Screen } from "../../components/ui";
+import { BackButton, Button, Screen } from "../../components/ui";
 import { colors, fonts, fontSizes, lineHeights, spacing } from "../../theme";
 import { humanAuthError } from "../../lib/errors";
 import { supabase } from "../../lib/supabase";
@@ -70,6 +70,7 @@ export default function VerifyEmailScreen() {
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <View style={styles.hero}>
+          <BackButton />
           <Text style={styles.title}>Vérifiez votre e-mail</Text>
           <Text style={styles.subtitle}>
             Nous avons envoyé un code à 6 chiffres à{"\n"}
