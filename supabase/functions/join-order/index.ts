@@ -85,7 +85,12 @@ Deno.serve(async (req: Request) => {
     const order = joinRes.order as OrderRow;
     const createdPIs: string[] = [];
 
-    const cleanup = async (message: string) => {
+    // Libère TOUTE réservation : annule les PaymentIntents déjà créés et
+    // supprime la participation « pending_payment » posée à l'étape 1. Sans
+    // cela, un parcours interrompu (carte absente, 3-D Secure, refus) laissait
+    // une participation fantôme et tout nouvel essai échouait en « Vous
+    // participez déjà à cette commande » : le paiement devenait inatteignable.
+    const release = async () => {
       for (const pi of createdPIs) {
         try {
           await stripePost(`/v1/payment_intents/${pi}/cancel`, { cancellation_reason: "abandoned" });
@@ -102,6 +107,10 @@ Deno.serve(async (req: Request) => {
       } catch (err) {
         console.error("join-order cleanup participation", err);
       }
+    };
+
+    const cleanup = async (message: string) => {
+      await release();
       return json({ ok: false, error: message }, 402);
     };
 
@@ -123,6 +132,10 @@ Deno.serve(async (req: Request) => {
     const customerId = await ensureCustomer(admin, user.id, user.email);
     const card = await firstCard(customerId);
     if (!card) {
+      // Aucun moyen de paiement : on libère la réservation AVANT de renvoyer
+      // l'utilisateur vers l'enregistrement de carte, pour qu'il puisse
+      // reprendre le parcours juste après (pas de participation fantôme).
+      await release();
       return json({
         ok: false,
         action: "setup_required",

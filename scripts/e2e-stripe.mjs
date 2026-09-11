@@ -17,6 +17,12 @@
 //   E. 3-D Secure : échec propre — PIs annulés, compteur intact
 //   F. Seuil non atteint : close-order → annulation des pré-autorisations,
 //      aucun débit, traces product_release / deposit_release
+//   G. RLS : lecture de group_orders / participations en tant qu'utilisateur
+//      authentifié (pas service_role) — non-régression de la récursion 42P17
+//      introduite par les policies 0006, corrigée en 0013.
+//   H. Parcours de paiement : carte absente → enregistrement → reprise du
+//      join (non-régression de la participation fantôme qui rendait le
+//      paiement inatteignable — correctif 0014).
 //
 // Usage :
 //   1. supabase start && supabase db reset
@@ -666,9 +672,175 @@ async function scenarioF() {
 }
 
 // ============================================================================
+// Scénario G — RLS : lecture de group_orders / participations en tant
+// qu'utilisateur AUTHENTIFIÉ (jamais service_role : c'est précisément ce que
+// le bug de production ne couvrait pas).
+//
+// Régression : les policies 0006 se référençaient mutuellement
+// (group_orders → participations → group_orders). Les sous-requêtes d'une
+// policy étant soumises au RLS de la table lue, Postgres bouclait et rejetait
+// TOUTE lecture client avec 42P17 « infinite recursion detected in policy for
+// relation group_orders » — écran Découvrir et détail de commande cassés, donc
+// paiement inatteignable. Correctif 0013 : helpers SECURITY DEFINER.
+// ============================================================================
+async function scenarioG() {
+  console.log("\n— Scénario G : RLS sans récursion (lecture client authentifiée)");
+
+  const camille = await signIn("organisateur@voizy.test");
+  const gerant = await signIn("commercant@voizy.test");
+  const tiers = await authUser(`rls-${Date.now()}@voizy.test`, "Tiers RLS");
+
+  const [offer] = await dbSelect("offers", `select=id,merchant_id&merchant_id=eq.${EPICERIE}&limit=1`);
+  const order = await createOrder(camille.access_token, offer.merchant_id, offer.id);
+  const url = (qs) => `${URL}/rest/v1/${qs}`;
+  const asUser = (token) => userHeaders(token);
+
+  // 1. Un tiers peut lire une commande OUVERTE (règle du fil « Découvrir »)
+  const open = await http(url(`group_orders?select=id,status&id=eq.${order.id}`), {
+    headers: asUser(tiers.access_token),
+  });
+  check(
+    "RLS : group_orders lisible par un client authentifié (pas de 42P17)",
+    open.status === 200,
+    `HTTP ${open.status}${open.status !== 200 ? ` ${JSON.stringify(open.data)}` : ""}`,
+  );
+  check("RLS : commande ouverte visible par un tiers", Array.isArray(open.data) && open.data.length === 1,
+    `${Array.isArray(open.data) ? open.data.length : "?"} ligne(s)`);
+
+  // 2. participations lisible sans récursion (le cycle passait aussi par là)
+  const parts = await http(url(`participations?select=id,status&group_order_id=eq.${order.id}`), {
+    headers: asUser(tiers.access_token),
+  });
+  check(
+    "RLS : participations lisibles par un client authentifié (pas de 42P17)",
+    parts.status === 200,
+    `HTTP ${parts.status}${parts.status !== 200 ? ` ${JSON.stringify(parts.data)}` : ""}`,
+  );
+
+  // 3. Commande verrouillée : le tiers NON participant ne doit plus la voir
+  await dbUpdate("group_orders", `id=eq.${order.id}`,
+    { status: "confirmed", confirmed_at: new Date().toISOString() });
+
+  const hidden = await http(url(`group_orders?select=id,status&id=eq.${order.id}`), {
+    headers: asUser(tiers.access_token),
+  });
+  check(
+    "RLS : commande confirmée masquée au tiers non participant",
+    hidden.status === 200 && hidden.data.length === 0,
+    `HTTP ${hidden.status} — ${hidden.data.length} ligne(s)`,
+  );
+
+  // 4. L'organisateur voit toujours la sienne (organizer_id = auth.uid())
+  const org = await http(url(`group_orders?select=id,status&id=eq.${order.id}`), {
+    headers: asUser(camille.access_token),
+  });
+  check("RLS : l'organisateur voit sa commande confirmée",
+    org.status === 200 && org.data.length === 1, `HTTP ${org.status} — ${org.data.length} ligne(s)`);
+
+  // 5. Le gérant du commerçant voit la commande de son commerce
+  const mgr = await http(url(`group_orders?select=id,status&id=eq.${order.id}`), {
+    headers: asUser(gerant.access_token),
+  });
+  check("RLS : le gérant du commerçant voit la commande confirmée",
+    mgr.status === 200 && mgr.data.length === 1, `HTTP ${mgr.status} — ${mgr.data.length} ligne(s)`);
+
+  // 6. Un participant voit la commande à laquelle il participe (via participations)
+  await dbInsert("participations", {
+    group_order_id: order.id, user_id: tiers.user.id, amount: 9.5, deposit_amount: 5,
+  });
+  const asPart = await http(url(`group_orders?select=id,status&id=eq.${order.id}`), {
+    headers: asUser(tiers.access_token),
+  });
+  check("RLS : le participant voit la commande confirmée",
+    asPart.status === 200 && asPart.data.length === 1,
+    `HTTP ${asPart.status} — ${asPart.data.length} ligne(s)`);
+
+  // 7. …et sa propre ligne de participation
+  const ownPart = await http(url(`participations?select=id,status&group_order_id=eq.${order.id}`), {
+    headers: asUser(tiers.access_token),
+  });
+  check("RLS : le participant voit sa participation",
+    ownPart.status === 200 && ownPart.data.length === 1,
+    `HTTP ${ownPart.status} — ${ownPart.data.length} ligne(s)`);
+}
+
+// ============================================================================
+// Scénario H — Parcours de paiement : carte absente → enregistrement → reprise
+//
+// Régression : join-order réservait une participation puis renvoyait
+// « setup_required » SANS la libérer. Le second essai (après enregistrement de
+// la carte) échouait en « Vous participez déjà à cette commande. » — le
+// paiement était définitivement inatteignable (bug de production).
+// Le scénario exerce exactement le parcours réel de l'app : Rejoindre → « il
+// faut une carte » → enregistrement → Rejoindre à nouveau.
+// NB : dépend du scénario A (compte Connect actif sur l'Épicerie).
+// ============================================================================
+async function scenarioH() {
+  console.log("\n=== H. Paiement : carte absente puis reprise du parcours ===");
+
+  const mer = (await dbSelect("merchants", `select=status,stripe_account_id&id=eq.${EPICERIE}`))[0];
+  if (mer?.status !== "active" || !mer?.stripe_account_id) {
+    note("Épicerie sans compte Connect : scénario H ignoré (lancer après le scénario A).");
+    return;
+  }
+
+  const camille = await signIn("organisateur@voizy.test");
+  const neuf = await authUser(`sanscarte-${Date.now()}@voizy.test`, "Sans Carte");
+
+  const offer = (await dbSelect("offers", `select=id&merchant_id=eq.${EPICERIE}&limit=1`))[0];
+  const order = await createOrder(camille.access_token, EPICERIE, offer.id);
+
+  // 1. Sans carte : refus explicite, action « setup_required » (pas une erreur brute)
+  const first = await callFn("join-order", { group_order_id: order.id }, neuf.access_token);
+  check(
+    "1er essai sans carte → setup_required (402)",
+    first.status === 402 && first.data?.action === "setup_required",
+    JSON.stringify(first.data),
+  );
+
+  // 2. Aucune participation fantôme ne doit rester (le bug d'origine)
+  const ghosts = await dbSelect("participations", `select=status&group_order_id=eq.${order.id}`);
+  check(
+    "réservation libérée : aucune participation fantôme",
+    ghosts.length === 0 || ghosts.every((p) => p.status === "cancelled"),
+    ghosts.map((p) => p.status).join(", ") || "aucune",
+  );
+
+  // 3. Le compteur reste intact
+  const before = (await dbSelect("group_orders", `select=participants_current&id=eq.${order.id}`))[0];
+  check("compteur intact après le refus", before.participants_current === 0,
+    `participants=${before.participants_current}`);
+
+  // 4. Après enregistrement de la carte, le MÊME utilisateur peut rejoindre
+  const customer = await ensureCustomer(neuf.user.id, neuf.user.email);
+  await attachCard(customer, "4242424242424242");
+  const retry = await callFn("join-order", { group_order_id: order.id }, neuf.access_token);
+  check(
+    "reprise après enregistrement de la carte → join accepté",
+    retry.status === 200 && retry.data?.ok === true,
+    retry.data?.error ?? `status=${retry.status}`,
+  );
+
+  // 5. Le paiement est bien créé (produit + caution) et rattaché
+  const parts = await dbSelect(
+    "participations",
+    `select=id,status,product_pi_id,deposit_pi_id&group_order_id=eq.${order.id}`,
+  );
+  check(
+    "participation « paid » avec les 2 PaymentIntents (produit + caution)",
+    parts.length === 1 && parts[0].status === "paid" &&
+      Boolean(parts[0].product_pi_id) && Boolean(parts[0].deposit_pi_id),
+    JSON.stringify(parts[0] ?? null),
+  );
+  const after = (await dbSelect("group_orders", `select=participants_current&id=eq.${order.id}`))[0];
+  check("compteur incrémenté d'exactement 1", after.participants_current === 1,
+    `participants=${after.participants_current}`);
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;

@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { EmptyState, ScreenHeader } from "../../components/ui";
+import { Button, EmptyState, ScreenHeader } from "../../components/ui";
 import { OrderCard } from "../../components/OrderCard";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
@@ -92,11 +92,15 @@ export default function DiscoverScreen() {
       ) : loading ? (
         <ActivityIndicator size="large" color={colors.brand} style={{ marginTop: 60 }} />
       ) : !hasLocation ? (
-        <EmptyState
-          icon="📍"
-          title="Définissez votre quartier"
-          hint="Choisissez votre quartier (GPS ou adresse) pour voir les commerçants et les commandes groupées autour de chez vous."
-        />
+        <View style={styles.noLocation}>
+          <EmptyState
+            icon="📍"
+            title="Définissez votre quartier"
+            hint="Choisissez votre quartier (GPS ou adresse) pour voir les commerçants et les commandes groupées autour de chez vous."
+          />
+          {/* Jamais de cul-de-sac : l'action est visible, pas cachée. */}
+          <Button title="Choisir mon quartier" onPress={() => router.push("/onboarding")} />
+        </View>
       ) : (
         <FlatList
           data={openOrders}
@@ -195,6 +199,7 @@ const styles = StyleSheet.create({
   },
   createBtnText: { fontSize: fontSizes.body, fontWeight: "700", color: colors.onBrand, fontFamily: fonts.bold },
   listContent: { paddingBottom: 90 },
+  noLocation: { gap: spacing.md },
   errorBox: { padding: spacing.md, alignItems: "center" },
   errorText: { color: colors.danger, textAlign: "center", fontFamily: fonts.medium },
   sectionTitleRow: {

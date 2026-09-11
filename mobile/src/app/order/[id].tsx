@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   Share,
@@ -47,6 +48,8 @@ export default function OrderScreen() {
 
   const [joining, setJoining] = useState(false);
   const [needCard, setNeedCard] = useState(false);
+  const [payStep, setPayStep] = useState(false);
+  const [busyCard, setBusyCard] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [noShowIds, setNoShowIds] = useState<Set<string>>(new Set());
 
@@ -130,6 +133,8 @@ export default function OrderScreen() {
       const res = await joinOrder(order.id);
       if (!res.ok) {
         if (res.action === "setup_required") {
+          // Pas de carte : on garde l'étape de paiement ouverte et on propose
+          // l'enregistrement — le parcours reprend ensuite tout seul.
           setNeedCard(true);
         } else {
           setError(res.error);
@@ -137,6 +142,7 @@ export default function OrderScreen() {
         return;
       }
       setNeedCard(false);
+      setPayStep(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Impossible de rejoindre la commande.");
@@ -145,9 +151,18 @@ export default function OrderScreen() {
     }
   };
 
-  const onCardSetupDone = async () => {
+  // Enregistre la carte puis reprend le parcours sans faire re-taper l'utilisateur.
+  const onCardSetup = async () => {
+    setBusyCard(true);
+    setError(null);
+    const ok = await startCardSetup();
+    setBusyCard(false);
+    if (!ok) {
+      setError("La carte n'a pas été enregistrée. Réessayez.");
+      return;
+    }
     setNeedCard(false);
-    await load();
+    await doJoin();
   };
 
   const share = async () => {
@@ -294,27 +309,20 @@ export default function OrderScreen() {
           </View>
         ) : null}
 
-        {/* Actions */}
-        {canJoin && !needCard ? (
+        {/* Action principale : ouvrir l'ÉTAPE DE PAIEMENT (jamais masquée). */}
+        {canJoin ? (
           <View style={styles.actions}>
             <Button
               title={`Rejoindre — ${formatPrice(order.group_price)} + ${formatPrice(order.deposit_amount)} de caution`}
-              onPress={doJoin}
-              loading={joining}
+              onPress={() => {
+                setError(null);
+                setPayStep(true);
+              }}
               variant="accent"
             />
             <Text style={styles.joinHint}>
-              Le paiement n'est prélevé que si le seuil est atteint. Sinon, rien n'est débité.
+              Le produit n'est débité que si le seuil de {order.threshold} participants est atteint.
             </Text>
-          </View>
-        ) : null}
-
-        {canJoin && needCard ? (
-          <View style={styles.actions}>
-            <Text style={styles.needCardText}>
-              Vous devez d'abord enregistrer une carte pour participer (paiement + caution).
-            </Text>
-            <Button title="💳 Enregistrer ma carte" onPress={async () => startCardSetup().then(onCardSetupDone)} />
           </View>
         ) : null}
 
@@ -393,6 +401,86 @@ export default function OrderScreen() {
 
         <View style={{ height: 60 }} />
       </ScrollView>
+
+      {/* ------------------------------------------------------------------
+          Étape de paiement explicite : montants détaillés + une seule
+          décision. Le paiement n'est pas un endroit où simplifier en le
+          cachant — il reste visible et annulable.
+      ------------------------------------------------------------------ */}
+      <Modal
+        visible={payStep}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPayStep(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet} accessibilityViewIsModal>
+            <Text style={styles.modalTitle}>Vérifier le paiement</Text>
+            <Text style={styles.modalSubtitle}>{order.title}</Text>
+
+            <View style={styles.payBox}>
+              <Row style={styles.payLine}>
+                <Text style={styles.payLabel}>Produit — {order.unit_label}</Text>
+                <Text style={styles.payValue}>{formatPrice(order.group_price)}</Text>
+              </Row>
+              <Row style={styles.payLine}>
+                <Text style={styles.payLabel}>Caution (remboursable)</Text>
+                <Text style={styles.payValue}>{formatPrice(order.deposit_amount)}</Text>
+              </Row>
+              <View style={styles.payDivider} />
+              <Row style={styles.payLine}>
+                <Text style={styles.payTotalLabel}>Bloqué aujourd'hui</Text>
+                <Text style={styles.payTotal}>
+                  {formatPrice(order.group_price + order.deposit_amount)}
+                </Text>
+              </Row>
+            </View>
+
+            <Text style={styles.payHint}>
+              Le produit n'est débité que si le seuil de {order.threshold} participants est
+              atteint. La caution est libérée au retrait : vous ne payez que le produit.
+            </Text>
+
+            {needCard ? (
+              <Text style={styles.payWarn}>
+                Aucune carte enregistrée. Ajoutez-la pour finaliser le paiement — vous reviendrez
+                ici automatiquement.
+              </Text>
+            ) : null}
+
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            {needCard ? (
+              <Button
+                title="💳 Enregistrer ma carte"
+                onPress={onCardSetup}
+                loading={busyCard}
+                variant="accent"
+              />
+            ) : (
+              <Button
+                title={`Confirmer le paiement — ${formatPrice(order.group_price + order.deposit_amount)}`}
+                onPress={doJoin}
+                loading={joining}
+                variant="accent"
+              />
+            )}
+
+            <Button
+              title="Annuler"
+              variant="outline"
+              onPress={() => {
+                setPayStep(false);
+                setError(null);
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -425,6 +513,32 @@ const styles = StyleSheet.create({
   errorBox: { marginTop: spacing.md, backgroundColor: colors.dangerSoft, borderRadius: radius.md, padding: spacing.md },
   errorText: { color: colors.danger, fontSize: fontSizes.body, fontFamily: fonts.medium },
   actions: { marginTop: spacing.md, gap: spacing.sm },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(36,48,43,0.45)", justifyContent: "flex-end" },
+  modalSheet: {
+    backgroundColor: colors.bg,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+    gap: spacing.sm,
+  },
+  modalTitle: { fontSize: fontSizes.title, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold },
+  modalSubtitle: { fontSize: fontSizes.body, color: colors.inkMuted, fontFamily: fonts.regular },
+  payBox: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  payLine: { justifyContent: "space-between", paddingVertical: 6 },
+  payLabel: { fontSize: fontSizes.body, color: colors.ink, fontFamily: fonts.regular },
+  payValue: { fontSize: fontSizes.body, fontWeight: "700", color: colors.ink, fontFamily: fonts.bold },
+  payDivider: { height: 1, backgroundColor: colors.border, marginVertical: 6 },
+  payTotalLabel: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.ink, fontFamily: fonts.extraBold },
+  payTotal: { fontSize: fontSizes.heading, fontWeight: "800", color: colors.brand, fontFamily: fonts.extraBold },
+  payHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },
+  payWarn: { fontSize: fontSizes.body, color: colors.danger, lineHeight: lineHeights.body, fontFamily: fonts.medium },
   joinHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, textAlign: "center", lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },
   needCardText: { fontSize: fontSizes.body, color: colors.inkMuted, textAlign: "center", lineHeight: lineHeights.body, fontFamily: fonts.regular },
   noShowHint: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, marginBottom: 4, lineHeight: lineHeights.bodySmall, fontFamily: fonts.regular },

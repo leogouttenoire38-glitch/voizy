@@ -40,12 +40,18 @@ async function callEdge<T>(name: string, opts: CallOptions = {}): Promise<T> {
 }
 
 // --- Géocodage (quartier de l'utilisateur) -----------------------------------
+// La fonction est appelée depuis l'onboarding, donc APRÈS connexion : on envoie
+// le JWT de session. Sans lui, le Cloud (verify_jwt = true) répondait 401
+// « Missing authorization header » et la recherche d'adresse tapée échouait.
 export async function geocodeAddress(address: string) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
   const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
   const res = await fetch(`${apiOrigin()}/functions/v1/geocode`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(anon ? { apikey: anon } : {}),
     },
     body: JSON.stringify({ address }),

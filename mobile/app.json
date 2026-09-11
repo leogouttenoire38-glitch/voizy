@@ -18,9 +18,9 @@
     },
     "android": {
       "package": "com.voizy.app",
-      "versionCode": 4,
+      "versionCode": 5,
       "adaptiveIcon": {
-        "backgroundColor": "#4F46E5",
+        "backgroundColor": "#2F6F4F",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
@@ -40,7 +40,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#4F46E5",
+          "backgroundColor": "#2F6F4F",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 120
         }

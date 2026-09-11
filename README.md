@@ -29,7 +29,7 @@ voizy/
 ├── .env.example                  # clés Supabase / Stripe / Expo
 ├── supabase/
 │   ├── config.toml               # config CLI locale
-│   ├── migrations/               # 0001 → 0010 (schéma, RLS, RPC, triggers, seeds)
+│   ├── migrations/               # 0001 → 0014 (schéma, RLS, RPC, triggers, seeds, correctifs)
 │   └── functions/
 │       ├── _shared/              # cors, supabase admin, stripe (Connect), push, settle
 │       ├── geocode/              # adresse → lat/lng (Nominatim)
@@ -55,6 +55,21 @@ par participant) · `transactions` (journal ventilé : brut, commission Voizy,
 frais Stripe estimés/réels, net commerçant) · `notifications` · `push_tokens` — le tout
 protégé par RLS (participants pour une commande, gestionnaire pour un commerce,
 profil public sans email/téléphone).
+
+### RLS : jamais de sous-requête croisée entre deux tables
+
+⚠️ Les sous-requêtes d'une policy sont elles-mêmes soumises au RLS des tables
+qu'elles lisent. Deux policies qui se référencent mutuellement (cas historique
+`group_orders` → `participations` → `group_orders`) font échouer **toute**
+lecture client avec `42P17 infinite recursion detected in policy for relation
+…` — écran « Découvrir » et détail de commande cassés, donc paiement
+inatteignable.
+
+**Règle** : les vérifications croisées passent par des helpers `SECURITY
+DEFINER` (`is_order_participant`, `is_order_organizer`, `is_order_manager`,
+migration `0013`), comme les RPC de feed. Le scénario E2E **G** verrouille ce
+comportement avec un vrai utilisateur authentifié (jamais `service_role`, qui
+contourne RLS et ne verrait donc pas la régression).
 
 ## Démarrage rapide
 
@@ -217,14 +232,17 @@ Connect + webhook signé, garde-fou commerçant non connecté, **course au seuil
 **2 PaymentIntents par participant** (produit capturé au seuil avec commission
 5 % ; frais Stripe à la charge du commerçant vérifiés sur le transfert, caution
 en pré-autorisation), **no-show** (caution capturée / libérée), **3-D Secure**
-(avortement propre, aucun débit) et **seuil non atteint** (`close-order` →
-annulations + traces `release`).
+(avortement propre, aucun débit), **seuil non atteint** (`close-order` →
+annulations + traces `release`), **RLS lue en tant qu'utilisateur authentifié**
+(scénario G : les policies `group_orders` ↔ `participations` ne doivent jamais
+récurser) et **parcours de paiement carte absente → enregistrement → reprise**
+(scénario H : aucune participation fantôme).
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 34 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 48 ✅ / 0 ❌ »
 ```
 
 Notes importantes :
@@ -262,7 +280,7 @@ local reste indépendant :
 export SUPABASE_ACCESS_TOKEN=sbp_…
 supabase link --project-ref <ref>
 
-# 2. Pousser les migrations 0001 → 0012 (ordre identique à local)
+# 2. Pousser les migrations 0001 → 0014 (ordre identique à local)
 supabase db push
 
 # 3. Secrets des fonctions côté Cloud (mêmes noms qu'en local)
