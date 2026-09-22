@@ -24,3 +24,26 @@ export function humanAuthError(message: string | null | undefined, fallback: str
 
   return message ?? fallback;
 }
+
+/**
+ * Traduit une erreur de paiement (Edge Function, Stripe, réseau) en message
+ * clair. Jamais de jargon technique affiché à l'utilisateur.
+ */
+export function humanPaymentError(input: unknown): string {
+  const message = input instanceof Error ? input.message : typeof input === "string" ? input : "";
+  const m = message.toLowerCase();
+  if (!m) return "Le paiement n'a pas pu être préparé. Réessayez.";
+
+  if (/abort|timeout|trop long|délai|delai/i.test(m))
+    return "Le serveur ne répond pas. Vérifiez votre connexion puis réessayez.";
+  if (/network|fetch|offline|failed to fetch/i.test(m))
+    return "Problème de connexion. Vérifiez votre réseau puis réessayez.";
+  if (/not a valid url|invalid url/i.test(m))
+    return "La page de paiement n'a pas pu être ouverte. Mettez l'application à jour puis réessayez.";
+  if (/auth|unauthor|jwt|session|401|403/i.test(m))
+    return "Votre session a expiré. Reconnectez-vous puis réessayez.";
+  if (/rate|too many/i.test(m))
+    return "Trop de tentatives. Attendez un instant puis réessayez.";
+
+  return "Le paiement n'a pas pu être préparé. Réessayez dans un instant.";
+}

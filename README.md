@@ -148,6 +148,23 @@ Respecte le cahier des charges (§7.2) : séparation stricte entre la
    (capture, conformément aux CGV) + notifications.
 6. **Litige** (MVP) : résolution manuelle au dashboard Stripe.
 
+### Liens profonds des pages Stripe (à ne pas régresser)
+
+Les URL de retour passées à Stripe sont **construites explicitement** dans
+`mobile/src/lib/links.ts` (`voizy://payments?setup=success|cancel`). Ne jamais
+utiliser `createURL()` d'expo-linking pour cela : dans un build autonome il
+renvoie `voizy:///payments` (hôte vide), que Stripe refuse (« Not a valid
+URL ») — l'appel échouait alors en 500 et l'écran d'enregistrement de carte
+restait en chargement indéfini. Le bug était invisible en Expo Go, où la même
+fonction renvoie une URL `exp://…` avec hôte, acceptée par Stripe.
+
+L'app ne déduit jamais le succès de l'URL de retour : après le parcours, elle
+interroge l'état réel chez Stripe (`setup-payment` en GET,
+`has_payment_method`). Le retour est détecté par trois filets (deep link,
+retour au premier plan, délai maximum) et `startCardSetup()` ne lève jamais —
+l'écran appelant arrête donc toujours son chargement. Les appels Edge Functions
+sont bornés (20 s) pour qu'un réseau muet ne bloque rien.
+
 ## Modèle économique (qui paie quoi)
 
 - **Commission Voizy** : **5 %** du montant produit par défaut
@@ -235,14 +252,17 @@ en pré-autorisation), **no-show** (caution capturée / libérée), **3-D Secure
 (avortement propre, aucun débit), **seuil non atteint** (`close-order` →
 annulations + traces `release`), **RLS lue en tant qu'utilisateur authentifié**
 (scénario G : les policies `group_orders` ↔ `participations` ne doivent jamais
-récurser) et **parcours de paiement carte absente → enregistrement → reprise**
-(scénario H : aucune participation fantôme).
+récurser), **parcours de paiement carte absente → enregistrement → reprise**
+(scénario H : aucune participation fantôme) et **enregistrement de carte**
+(scénario I : les URL de retour de l'app sont acceptées puis conservées par
+Stripe, une URL sans hôte est refusée, et `setup-payment` reflète l'état réel
+« carte enregistrée »).
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 48 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 54 ✅ / 0 ❌ »
 ```
 
 Notes importantes :

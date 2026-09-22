@@ -1,39 +1,50 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect } from "expo-router";
 import { Button, Card, Screen, ScreenHeader } from "../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme";
 import { setupPaymentStatus } from "../lib/api";
 import { startCardSetup } from "../lib/checkout";
 
+type Notice = { text: string; tone: "ok" | "error" };
+
 export default function PaymentsScreen() {
   const [status, setStatus] = useState<"loading" | "has_card" | "no_card" | "error">("loading");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const res = await setupPaymentStatus();
-      if (res.ok) {
-        setStatus(res.has_payment_method ? "has_card" : "no_card");
-      } else {
-        setStatus("error");
-      }
+      setStatus(res.ok ? (res.has_payment_method ? "has_card" : "no_card") : "error");
     } catch {
       setStatus("error");
     }
-  };
-
-  useEffect(() => {
-    load();
   }, []);
+
+  // Recharge à chaque affichage : au retour de Stripe (deep link voizy://payments)
+  // l'écran montre l'état réel de la carte au lieu de rester sur « Aucune carte ».
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
 
   const addCard = async () => {
     setBusy(true);
     setNotice(null);
-    const ok = await startCardSetup();
-    setBusy(false);
-    if (ok) {
-      setNotice("Carte enregistrée ✅");
+    try {
+      const res = await startCardSetup();
+      setNotice(
+        res.ok
+          ? { text: "Carte enregistrée ✅", tone: "ok" }
+          : { text: res.error, tone: "error" },
+      );
+    } catch {
+      setNotice({ text: "Impossible d'enregistrer la carte. Réessayez.", tone: "error" });
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'erreur inattendue.
+      setBusy(false);
       await load();
     }
   };
@@ -72,7 +83,11 @@ export default function PaymentsScreen() {
           />
         ) : null}
 
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+        {notice ? (
+          <Text style={[styles.notice, notice.tone === "error" && styles.noticeError]}>
+            {notice.text}
+          </Text>
+        ) : null}
       </Card>
 
       <View style={styles.legalBox}>
@@ -92,6 +107,7 @@ const styles = StyleSheet.create({
   okHint: { fontSize: fontSizes.body, color: colors.inkMuted, marginTop: 4, lineHeight: lineHeights.body, fontFamily: fonts.regular },
   hint: { fontSize: fontSizes.body, color: colors.inkMuted, lineHeight: lineHeights.body, fontFamily: fonts.regular },
   notice: { color: colors.brand, fontSize: fontSizes.body, marginTop: spacing.md, fontWeight: "700", fontFamily: fonts.bold },
+  noticeError: { color: colors.danger },
   legalBox: {
     marginTop: spacing.md,
     backgroundColor: colors.success,

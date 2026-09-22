@@ -23,6 +23,12 @@
 //   H. Parcours de paiement : carte absente → enregistrement → reprise du
 //      join (non-régression de la participation fantôme qui rendait le
 //      paiement inatteignable — correctif 0014).
+//   I. Enregistrement de carte : les URL de retour générées par l'app
+//      (mobile/src/lib/links.ts) doivent être acceptées par Stripe, qui doit
+//      les conserver telles quelles ; l'état « carte enregistrée » renvoyé par
+//      setup-payment est la source de vérité de l'app. Non-régression du
+//      bouton en chargement infini en build (createURL → voizy:///payments,
+//      hôte vide, refusée par Stripe : « Not a valid URL »).
 //
 // Usage :
 //   1. supabase start && supabase db reset
@@ -838,9 +844,85 @@ async function scenarioH() {
 }
 
 // ============================================================================
+// Scénario I — Enregistrement de carte : URL de retour + état réel
+//
+// Régression : l'app construisait ses URL de retour avec createURL("/payments"),
+// qui renvoie `voizy:///payments` (hôte vide) dans un build autonome — en Expo
+// Go la même fonction renvoyait une URL exp:// avec hôte, d'où le bug invisible
+// en développement. Stripe refusait cette URL (« Not a valid URL »), la fonction
+// répondait 500 et l'écran « Enregistrer ma carte » tournait sans fin (aucun
+// try/catch ne remettait le bouton au repos).
+// ============================================================================
+async function scenarioI() {
+  console.log("\n=== I. Enregistrement de carte : URL de retour + état réel ===");
+  // Miroir de mobile/src/lib/links.ts — ce que l'app envoie réellement.
+  const APP_LINK = "voizy://payments";
+
+  const user = await authUser(`carte-${Date.now()}@voizy.test`, "Carte Test");
+  const headers = { "Content-Type": "application/json", ...userHeaders(user.access_token) };
+  const setupPayment = (body) =>
+    http(`${URL}/functions/v1/setup-payment`, {
+      method: body ? "POST" : "GET",
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // 1. Au départ : aucun client Stripe, donc aucune carte
+  const before = await setupPayment();
+  check(
+    "GET setup-payment → aucune carte au départ",
+    before.status === 200 && before.data?.has_payment_method === false,
+    JSON.stringify(before.data),
+  );
+
+  // 2. Les URL de retour de l'app (forme avec hôte) sont acceptées par Stripe
+  const created = await setupPayment({
+    success_url: `${APP_LINK}?setup=success`,
+    cancel_url: `${APP_LINK}?setup=cancel`,
+  });
+  check(
+    "POST setup-payment [voizy://payments?setup=…] → session créée",
+    created.status === 200 && Boolean(created.data?.url),
+    created.data?.error ?? `status=${created.status}`,
+  );
+
+  // 3. Stripe conserve l'URL de retour telle quelle : c'est elle qui ramène dans l'app
+  const sessionId = String(created.data?.url ?? "").split("/c/pay/")[1]?.split("#")[0];
+  const session = sessionId ? await stripeReq("GET", `/v1/checkout/sessions/${sessionId}`) : null;
+  check(
+    "success_url conservée par Stripe (deep link de retour)",
+    session?.success_url === `${APP_LINK}?setup=success`,
+    String(session?.success_url ?? "session introuvable"),
+  );
+  check("session en mode setup (aucun débit)", session?.mode === "setup", String(session?.mode));
+
+  // 4. Une URL sans hôte (ce que produisait createURL dans un build) est refusée
+  const emptyHost = await setupPayment({
+    success_url: "voizy:///payments?setup=success",
+    cancel_url: "voizy:///payments?setup=cancel",
+  });
+  check(
+    "URL sans hôte (createURL en build) refusée par Stripe",
+    emptyHost.status !== 200,
+    `status=${emptyHost.status} ${emptyHost.data?.error ?? ""}`.trim(),
+  );
+
+  // 5. Après enregistrement (ce que fait Stripe à la fin du Checkout), la
+  //    fonction renvoie l'état réel — source de vérité de l'app au retour.
+  const customer = await ensureCustomer(user.user.id, user.user.email);
+  const pm = await attachCard(customer, "4242424242424242");
+  const after = await setupPayment();
+  check(
+    "GET setup-payment → carte détectée après enregistrement",
+    after.status === 200 && after.data?.has_payment_method === true && after.data?.card?.id === pm,
+    JSON.stringify(after.data),
+  );
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;

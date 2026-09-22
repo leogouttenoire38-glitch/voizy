@@ -155,14 +155,20 @@ export default function OrderScreen() {
   const onCardSetup = async () => {
     setBusyCard(true);
     setError(null);
-    const ok = await startCardSetup();
-    setBusyCard(false);
-    if (!ok) {
-      setError("La carte n'a pas été enregistrée. Réessayez.");
-      return;
+    try {
+      const res = await startCardSetup();
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setNeedCard(false);
+      await doJoin();
+    } catch {
+      setError("Impossible d'enregistrer la carte. Réessayez.");
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'erreur inattendue.
+      setBusyCard(false);
     }
-    setNeedCard(false);
-    await doJoin();
   };
 
   const share = async () => {
