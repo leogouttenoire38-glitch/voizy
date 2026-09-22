@@ -14,15 +14,22 @@ export default function SignInScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // try/catch/finally obligatoire : sur erreur réseau inattendue, le bouton doit
+  // revenir au repos avec un message — jamais rester bloqué en silence.
   const doSignIn = async () => {
     if (!email || !password) return setError("Renseignez votre e-mail et votre mot de passe.");
     setBusy("password");
     setError(null);
     setNotice(null);
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-    setBusy(null);
-    if (err) setError(humanAuthError(err.message, "Impossible de vous connecter. Réessayez."));
-    // Succès : le layout (tabs) redirige vers / ou /onboarding.
+    try {
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      if (err) setError(humanAuthError(err.message, "Impossible de vous connecter. Réessayez."));
+      // Succès : le layout (tabs) redirige vers / ou /onboarding.
+    } catch (err) {
+      setError(humanAuthError(err instanceof Error ? err.message : "", "Impossible de vous connecter. Réessayez."));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const doCode = async () => {
@@ -30,10 +37,18 @@ export default function SignInScreen() {
     setBusy("magic");
     setError(null);
     setNotice(null);
-    const { error: err } = await supabase.auth.signInWithOtp({ email });
-    setBusy(null);
-    if (err) setError(humanAuthError(err.message, "Impossible d'envoyer le code. Réessayez."));
-    else router.replace({ pathname: "/verify-email", params: { email, type: "email" } });
+    try {
+      const { error: err } = await supabase.auth.signInWithOtp({ email });
+      if (err) {
+        setError(humanAuthError(err.message, "Impossible d'envoyer le code. Réessayez."));
+        return;
+      }
+      router.replace({ pathname: "/verify-email", params: { email, type: "email" } });
+    } catch (err) {
+      setError(humanAuthError(err instanceof Error ? err.message : "", "Impossible d'envoyer le code. Réessayez."));
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (

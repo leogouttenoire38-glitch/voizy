@@ -152,19 +152,31 @@ export default function NewOrderScreen() {
     }
     setPublishing(true);
     setError(null);
-    const { data, error: err } = await supabase.rpc("create_group_order", {
-      p_merchant_id: merchantId,
-      p_offer_id: offerId,
-      p_pickup_at: pickupDate.toISOString(),
-      p_pickup_location: pickupLocation.trim() || null,
-    });
-    setPublishing(false);
-    if (err || !data?.ok) {
-      setError((data as { error?: string } | null)?.error ?? err?.message ?? "Impossible de créer la commande.");
-      return;
+    // try/catch/finally obligatoire : sur erreur réseau inattendue, le bouton
+    // doit revenir au repos avec un message — jamais rester bloqué en silence.
+    try {
+      const { data, error: err } = await supabase.rpc("create_group_order", {
+        p_merchant_id: merchantId,
+        p_offer_id: offerId,
+        p_pickup_at: pickupDate.toISOString(),
+        p_pickup_location: pickupLocation.trim() || null,
+      });
+      if (err || !data?.ok) {
+        // Le message de la RPC est déjà en français ; à défaut on n'affiche
+        // jamais le texte technique de PostgREST (anglais, jargon).
+        setError(
+          (data as { error?: string } | null)?.error ??
+            "Impossible de créer la commande. Vérifiez votre connexion puis réessayez.",
+        );
+        return;
+      }
+      const order = data.order as { id: string; share_token: string; title: string; group_price: number; threshold: number; pickup_at: string };
+      setCreated(order);
+    } catch {
+      setError("Impossible de créer la commande. Vérifiez votre connexion puis réessayez.");
+    } finally {
+      setPublishing(false);
     }
-    const order = data.order as { id: string; share_token: string; title: string; group_price: number; threshold: number; pickup_at: string };
-    setCreated(order);
   };
 
   const shareCreated = async () => {

@@ -36,6 +36,8 @@ export default function VerifyEmailScreen() {
     return () => clearInterval(t);
   }, [wait]);
 
+  // try/catch/finally obligatoire : sur erreur réseau inattendue, le bouton doit
+  // revenir au repos avec un message — jamais rester bloqué en silence.
   const doVerify = async () => {
     const token = code.trim();
     if (!/^\d{6}$/.test(token)) {
@@ -43,27 +45,43 @@ export default function VerifyEmailScreen() {
     }
     setBusy(true);
     setError(null);
-    const { error: err } = await supabase.auth.verifyOtp({ email, token, type });
-    setBusy(false);
-    if (err) return setError(humanAuthError(err.message, "Le code n'est pas valide. Réessayez."));
-    // Session ouverte : le layout aiguille vers /onboarding si le quartier
-    // n'est pas encore choisi, sinon vers les onglets.
-    router.replace(type === "signup" ? "/onboarding" : "/");
+    try {
+      const { error: err } = await supabase.auth.verifyOtp({ email, token, type });
+      if (err) {
+        setError(humanAuthError(err.message, "Le code n'est pas valide. Réessayez."));
+        return;
+      }
+      // Session ouverte : le layout aiguille vers /onboarding si le quartier
+      // n'est pas encore choisi, sinon vers les onglets.
+      router.replace(type === "signup" ? "/onboarding" : "/");
+    } catch (err) {
+      setError(humanAuthError(err instanceof Error ? err.message : "", "Le code n'est pas valide. Réessayez."));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const doResend = async () => {
     setBusy(true);
     setError(null);
     setResent(false);
-    const res =
-      type === "signup"
-        ? await supabase.auth.resend({ type: "signup", email })
-        : await supabase.auth.signInWithOtp({ email });
-    setBusy(false);
-    if (res.error) return setError(humanAuthError(res.error.message, "Impossible d'envoyer un nouveau code."));
-    setResent(true);
-    setCode("");
-    setWait(RESEND_WAIT);
+    try {
+      const res =
+        type === "signup"
+          ? await supabase.auth.resend({ type: "signup", email })
+          : await supabase.auth.signInWithOtp({ email });
+      if (res.error) {
+        setError(humanAuthError(res.error.message, "Impossible d'envoyer un nouveau code."));
+        return;
+      }
+      setResent(true);
+      setCode("");
+      setWait(RESEND_WAIT);
+    } catch (err) {
+      setError(humanAuthError(err instanceof Error ? err.message : "", "Impossible d'envoyer un nouveau code."));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

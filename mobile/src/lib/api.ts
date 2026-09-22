@@ -1,6 +1,7 @@
 // Accès aux Edge Functions Supabase depuis l'app : en-têtes auth + parse des
 // réponses. Aucun secret ici — le JWT de session est ajouté automatiquement.
 import { supabase, apiOrigin } from "./supabase";
+import { fetchWithTimeout, isTimeoutError } from "./net";
 import type {
   ConfirmPickupResponse,
   JoinOrderResponse,
@@ -10,23 +11,19 @@ import type {
 
 export class ApiError extends Error {}
 
-// Au-delà de ce délai, on considère que l'appel est perdu. Sans cela, un réseau
-// qui ne répond pas laissait un bouton en chargement indéfiniment (l'appel ne
-// se résolvait ni ne se rejetait jamais).
-const REQUEST_TIMEOUT_MS = 20_000;
+// Le délai réseau est défini une seule fois dans ./net (partagé avec le client
+// Supabase, donc avec les écrans d'authentification) : un réseau muet rejette
+// toujours en temps borné au lieu de laisser un bouton tourner sans fin.
+function toApiError(err: unknown): ApiError {
+  if (isTimeoutError(err)) return new ApiError("Délai dépassé : le serveur ne répond pas.");
+  return err instanceof Error ? err : new ApiError("Connexion impossible.");
+}
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+async function edgeFetch(url: string, init: RequestInit = {}): Promise<Response> {
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchWithTimeout(url, init);
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new ApiError("Délai dépassé : le serveur ne répond pas.");
-    }
-    throw err instanceof Error ? err : new ApiError("Connexion impossible.");
-  } finally {
-    clearTimeout(timer);
+    throw toApiError(err);
   }
 }
 
@@ -41,7 +38,7 @@ async function callEdge<T>(name: string, opts: CallOptions = {}): Promise<T> {
   const token = data.session?.access_token;
   const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
-  const res = await fetchWithTimeout(`${apiOrigin()}/functions/v1/${name}`, {
+  const res = await edgeFetch(`${apiOrigin()}/functions/v1/${name}`, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -67,7 +64,7 @@ export async function geocodeAddress(address: string) {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
   const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
-  const res = await fetchWithTimeout(`${apiOrigin()}/functions/v1/geocode`, {
+  const res = await edgeFetch(`${apiOrigin()}/functions/v1/geocode`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

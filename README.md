@@ -162,8 +162,19 @@ L'app ne déduit jamais le succès de l'URL de retour : après le parcours, elle
 interroge l'état réel chez Stripe (`setup-payment` en GET,
 `has_payment_method`). Le retour est détecté par trois filets (deep link,
 retour au premier plan, délai maximum) et `startCardSetup()` ne lève jamais —
-l'écran appelant arrête donc toujours son chargement. Les appels Edge Functions
-sont bornés (20 s) pour qu'un réseau muet ne bloque rien.
+l'écran appelant arrête donc toujours son chargement.
+
+### Réseau : jamais de bouton bloqué en silence
+
+`mobile/src/lib/net.ts` borne **toutes** les requêtes dans le temps (20 s) : le
+client Supabase l'utilise comme `fetch` global (donc l'authentification aussi,
+pas seulement les Edge Functions). Un réseau muet rejette alors avec
+`RequestTimeoutError` au lieu d'attendre indéfiniment. Règle d'écriture : tout
+handler qui passe un bouton en chargement (`setBusy`/`setPublishing`) est
+entouré d'un `try/catch/finally` qui remet le bouton au repos, et les erreurs
+sont traduites par `lib/errors.ts` — un message non reconnu devient le message
+contextuel de l'écran, jamais le texte technique anglais de GoTrue/PostgREST.
+
 
 ## Modèle économique (qui paie quoi)
 
@@ -253,16 +264,19 @@ en pré-autorisation), **no-show** (caution capturée / libérée), **3-D Secure
 annulations + traces `release`), **RLS lue en tant qu'utilisateur authentifié**
 (scénario G : les policies `group_orders` ↔ `participations` ne doivent jamais
 récurser), **parcours de paiement carte absente → enregistrement → reprise**
-(scénario H : aucune participation fantôme) et **enregistrement de carte**
+(scénario H : aucune participation fantôme), **enregistrement de carte**
 (scénario I : les URL de retour de l'app sont acceptées puis conservées par
 Stripe, une URL sans hôte est refusée, et `setup-payment` reflète l'état réel
-« carte enregistrée »).
+« carte enregistrée ») et **auth sans blocage silencieux** (scénario J : un
+serveur muet est abandonné au délai par le module `net.ts` réellement importé,
+les erreurs GoTrue deviennent des messages français sans jargon, et les écrans
+à bouton gardent leur `try/catch/finally`).
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 54 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 64 ✅ / 0 ❌ »
 ```
 
 Notes importantes :

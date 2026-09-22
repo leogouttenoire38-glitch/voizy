@@ -29,6 +29,11 @@
 //      setup-payment est la source de vérité de l'app. Non-régression du
 //      bouton en chargement infini en build (createURL → voizy:///payments,
 //      hôte vide, refusée par Stripe : « Not a valid URL »).
+//   J. Authentification : aucun écran ne doit rester bloqué en silence. Un
+//      serveur muet est abandonné au délai (module net.ts réellement importé),
+//      les erreurs GoTrue deviennent des messages français sans jargon, et les
+//      écrans d'auth (connexion, inscription, code + renvoi) gardent leur
+//      try/catch/finally.
 //
 // Usage :
 //   1. supabase start && supabase db reset
@@ -42,6 +47,13 @@
 import { execSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+// NB : `URL` est déjà utilisé plus bas comme base d'API (chaîne) — on ne peut
+// donc pas employer le constructeur URL global pour résoudre les chemins.
+const repoFile = (rel) => pathToFileURL(join(import.meta.dirname, "..", rel));
 
 // ---------------------------------------------------------------------------
 // Utilitaires d'assertion
@@ -920,9 +932,158 @@ async function scenarioI() {
 }
 
 // ============================================================================
+// Scénario J — Authentification : jamais de bouton bloqué en silence
+//
+// Régression : les écrans de connexion, d'inscription et de saisie du code
+// faisaient `setBusy(true)` puis `await` sans try/catch/finally. Sur une erreur
+// réseau, la remise au repos n'était jamais atteinte : le bouton tournait sans
+// fin et aucun message n'était affiché. Deux volets :
+//   1. comportement réel du module de délai de l'app (mobile/src/lib/net.ts,
+//      importé directement — Node 22 sait exécuter les .ts) sur un serveur
+//      muet, et traduction des erreurs GoTrue en français sans jargon ;
+//   2. garde-fous de convention : le client Supabase et les écrans concernés
+//      doivent garder ce câblage (try/catch/finally).
+// ============================================================================
+async function scenarioJ() {
+  console.log("\n=== J. Auth : aucun blocage silencieux (délai, messages, garde-fous) ===");
+  const net = await import(repoFile("mobile/src/lib/net.ts").href);
+  const errors = await import(repoFile("mobile/src/lib/errors.ts").href);
+  const fallback = "Impossible de continuer. Réessayez.";
+  // Jargon technique qui ne doit JAMAIS atteindre l'écran.
+  const JARGON = /error|fetch|failed|failure|invalid|token|jwt|undefined|null|unauthorized|status|supabase|postgrest/i;
+
+  // 1. Le délai par défaut de l'app est borné
+  check(
+    "délai réseau par défaut de l'app borné (20 s)",
+    net.REQUEST_TIMEOUT_MS === 20_000,
+    `REQUEST_TIMEOUT_MS=${net.REQUEST_TIMEOUT_MS}`,
+  );
+
+  // 2. Serveur muet : accepte la connexion et ne répond jamais. C'est
+  //    exactement le cas qui laissait le bouton tourner indéfiniment.
+  const mute = createServer(() => {
+    /* volontairement muet : la socket reste ouverte, aucune réponse */
+  });
+  await new Promise((resolve) => mute.listen(0, "127.0.0.1", resolve));
+  const mutePort = mute.address().port;
+  const started = Date.now();
+  let timeoutErr = null;
+  try {
+    await net.fetchWithTimeout(`http://127.0.0.1:${mutePort}/muet`, {}, 1200);
+  } catch (err) {
+    timeoutErr = err;
+  }
+  const elapsed = Date.now() - started;
+  mute.close();
+  check(
+    "serveur muet → l'appel est bien abandonné au délai (net.ts réel)",
+    net.isTimeoutError(timeoutErr) && elapsed >= 1100 && elapsed <= 3500,
+    `${elapsed} ms — ${String(timeoutErr)}`,
+  );
+  const timeoutMsg = errors.humanAuthError(timeoutErr?.message, fallback);
+  check(
+    "délai dépassé → message humain, aucun jargon",
+    /répond pas/i.test(timeoutMsg) && !JARGON.test(timeoutMsg),
+    timeoutMsg,
+  );
+
+  // 3. Erreurs réelles de l'API d'authentification : réponse bornée et exploitable
+  const t0 = Date.now();
+  const badLogin = await http(`${URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders("") },
+    body: JSON.stringify({ email: "organisateur@voizy.test", password: "mauvais-mot-de-passe" }),
+  });
+  const loginMs = Date.now() - t0;
+  // `msg` = texte lisible de GoTrue (c'est lui que supabase-js met dans
+  // err.message, donc celui que voit l'écran) ; `error_code` = identifiant machine.
+  const loginMsg = errors.humanAuthError(
+    badLogin.data?.msg ?? badLogin.data?.error_code,
+    "Impossible de vous connecter. Réessayez.",
+  );
+  check(
+    "mot de passe erroné → réponse immédiate (aucune attente infinie)",
+    badLogin.status >= 400 && badLogin.status < 500 && loginMs < 3000,
+    `HTTP ${badLogin.status} en ${loginMs} ms`,
+  );
+  check(
+    "mot de passe erroné → message français sans jargon",
+    /mot de passe/i.test(loginMsg) && !JARGON.test(loginMsg),
+    loginMsg,
+  );
+
+  const t1 = Date.now();
+  const badCode = await http(`${URL}/auth/v1/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders("") },
+    body: JSON.stringify({ email: "organisateur@voizy.test", token: "000000", type: "email" }),
+  });
+  const codeMs = Date.now() - t1;
+  const codeMsg = errors.humanAuthError(
+    badCode.data?.msg ?? badCode.data?.error_code,
+    "Le code n'est pas valide. Réessayez.",
+  );
+  check(
+    "code OTP erroné → réponse immédiate et message français",
+    badCode.status >= 400 && badCode.status < 500 && codeMs < 3000 && /code/i.test(codeMsg) && !JARGON.test(codeMsg),
+    `HTTP ${badCode.status} en ${codeMs} ms — « ${codeMsg} »`,
+  );
+
+  // 4. Chemin de renvoi de code (bouton « Renvoyer le code ») : borné lui aussi
+  const t2 = Date.now();
+  const resend = await http(`${URL}/auth/v1/resend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders("") },
+    body: JSON.stringify({ email: "organisateur@voizy.test", type: "signup" }),
+  });
+  const resendMs = Date.now() - t2;
+  check(
+    "renvoi de code protégé (réponse bornée)",
+    resend.status === 200 || (resend.status >= 400 && resendMs < 3000),
+    `HTTP ${resend.status} en ${resendMs} ms`,
+  );
+
+  // 5. Aucun message non reconnu ne doit laisser passer du texte technique
+  const unknown = [
+    "TypeError: Failed to fetch",
+    "AuthApiError: invalid_grant",
+    "PostgrestError: infinite recursion detected in policy",
+  ];
+  check(
+    "messages inconnus → français, sans jargon (le texte brut n'atteint jamais l'écran)",
+    unknown.every((m) => {
+      const msg = errors.humanAuthError(m, fallback);
+      return msg !== m && msg.length > 0 && !JARGON.test(msg);
+    }),
+    unknown.map((m) => `${m} → « ${errors.humanAuthError(m, fallback)} »`).join(" | "),
+  );
+
+  // 6. Garde-fous de convention : le câblage de l'app ne doit pas être retiré.
+  const read = (rel) => readFileSync(repoFile(rel), "utf8");
+  const client = read("mobile/src/lib/supabase.ts");
+  check(
+    "client Supabase câblé sur le délai partagé (net.ts)",
+    client.includes("fetchWithTimeout") && client.includes("global: { fetch"),
+    "mobile/src/lib/supabase.ts",
+  );
+  const guarded = [
+    "mobile/src/app/(auth)/sign-in.tsx",
+    "mobile/src/app/(auth)/sign-up.tsx",
+    "mobile/src/app/(auth)/verify-email.tsx",
+    "mobile/src/app/new-order.tsx",
+  ];
+  const missing = guarded.filter((f) => !/\}\s*finally\s*\{/.test(read(f)));
+  check(
+    "écrans à bouton : try/catch/finally conservés",
+    missing.length === 0,
+    missing.length ? `manquant dans ${missing.join(", ")}` : "sign-in, sign-up, verify-email, new-order",
+  );
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;

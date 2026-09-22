@@ -31,34 +31,42 @@ export default function SignUpScreen() {
     void doSignUp();
   };
 
+  // try/catch/finally obligatoire : sur erreur réseau inattendue, le bouton doit
+  // revenir au repos avec un message — jamais rester bloqué en silence.
   const doSignUp = async () => {
     setBusy(true);
     setError(null);
+    try {
+      const { data, error: err } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: fullName.trim() },
+          ...(phone.trim() ? { phone: phone.trim() } : {}),
+        },
+      });
 
-    const { data, error: err } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName.trim() },
-        ...(phone.trim() ? { phone: phone.trim() } : {}),
-      },
-    });
-    setBusy(false);
-
-    if (err) {
-      // Compte déjà créé mais non confirmé → renvoyer vers la vérification
-      // (GoTrue refuse la double inscription, l'utilisateur a besoin du code).
-      if (/already registered|already been registered/i.test(err.message)) {
-        return router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
+      if (err) {
+        // Compte déjà créé mais non confirmé → renvoyer vers la vérification
+        // (GoTrue refuse la double inscription, l'utilisateur a besoin du code).
+        if (/already registered|already been registered/i.test(err.message)) {
+          router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
+          return;
+        }
+        setError(humanAuthError(err.message, "Impossible de créer le compte. Réessayez."));
+        return;
       }
-      return setError(humanAuthError(err.message, "Impossible de créer le compte. Réessayez."));
-    }
-    if (data.session) {
-      // Compte créé + session ouverte → on passe au choix du quartier.
-      router.replace("/onboarding");
-    } else {
-      // Confirmation par code e-mail : on passe à la saisie du code reçu.
-      router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
+      if (data.session) {
+        // Compte créé + session ouverte → on passe au choix du quartier.
+        router.replace("/onboarding");
+      } else {
+        // Confirmation par code e-mail : on passe à la saisie du code reçu.
+        router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
+      }
+    } catch (err) {
+      setError(humanAuthError(err instanceof Error ? err.message : "", "Impossible de créer le compte. Réessayez."));
+    } finally {
+      setBusy(false);
     }
   };
 

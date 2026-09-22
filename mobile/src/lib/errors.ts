@@ -1,9 +1,19 @@
-/** Traduit les erreurs Supabase/GoTrue en messages clairs, en langage humain. */
+/**
+ * Traduit les erreurs Supabase/GoTrue en messages clairs, en langage humain.
+ * Tout message non reconnu est remplacé par le message contextuel de l'écran :
+ * les erreurs brutes de GoTrue sont en anglais et truffées de jargon technique
+ * (codes HTTP, noms d'API) — jamais ce qu'un utilisateur doit lire.
+ */
 export function humanAuthError(message: string | null | undefined, fallback: string): string {
   const m = (message ?? "").toLowerCase();
   if (!m) return fallback;
 
-  if (/invalid login credentials|invalid email or password/i.test(m))
+  if (/délai dépassé|delai depasse|timeout|abort/i.test(m))
+    return "Le serveur ne répond pas. Vérifiez votre connexion puis réessayez.";
+
+  // GoTrue renvoie le texte lisible dans `msg` et l'identifiant machine dans
+  // `error_code` : on accepte les deux formes.
+  if (/invalid login credentials|invalid email or password|invalid_credentials/i.test(m))
     return "E-mail ou mot de passe incorrect. Vérifiez puis réessayez.";
   if (/email.*not.*confirm|confirm.*email|otp.*expired|expired token/i.test(m))
     return "Le code n'est plus valide. Demandez un nouveau code.";
@@ -22,7 +32,7 @@ export function humanAuthError(message: string | null | undefined, fallback: str
   if (/user.*not found/i.test(m))
     return "Aucun compte trouvé avec cet e-mail. Créez un compte pour commencer.";
 
-  return message ?? fallback;
+  return fallback;
 }
 
 /**
