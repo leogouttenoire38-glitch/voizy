@@ -6,6 +6,11 @@
 //                                       caution (no-show)
 //  - payment_intent.canceled          → libération de caution (retrait) ou
 //                                       annulation (seuil non atteint)
+//  - customer.subscription.created/updated/deleted
+//                                     → palier d'abonnement du commerçant
+//                                       (merchant_plan) : la source de vérité
+//                                       du plan free/pro. Voizy se rémunère
+//                                       par abonnement, JAMAIS par commission.
 //
 // Les transitions principales sont déjà faites par les Edge Functions ; ce
 // webhook est la ceinture-bretelles (idempotent) : il corrige la base si un
@@ -13,6 +18,84 @@
 import { handleOptions, json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/supabase.ts";
 import { verifyStripeWebhook } from "../_shared/stripe.ts";
+
+// ---------------------------------------------------------------------------
+// Abonnement commerçant (Stripe Billing) — palier free / pro de merchant_plan
+// ---------------------------------------------------------------------------
+type AdminClient = ReturnType<typeof adminClient>;
+
+type PlanStatus = "inactive" | "active" | "past_due" | "canceled";
+
+/** Traduit un statut d'abonnement Stripe vers le vocabulaire Voizy. */
+function planStatus(stripeStatus: string | undefined): PlanStatus {
+  switch (stripeStatus) {
+    case "active":
+    case "trialing":
+      return "active";
+    case "past_due":
+      return "past_due";
+    case "canceled":
+      return "canceled";
+    default:
+      // incomplete, incomplete_expired, unpaid, paused…
+      return "inactive";
+  }
+}
+
+async function syncMerchantPlan(admin: AdminClient, eventType: string, obj: Record<string, unknown>) {
+  const sub = obj as {
+    id?: string;
+    customer?: string | { id?: string };
+    status?: string;
+    current_period_end?: number;
+    metadata?: Record<string, string>;
+  };
+  const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null;
+
+  // Le merchant_id voyage dans les metadata (posées par merchant-subscribe) ;
+  // à défaut on retombe sur le customer de facturation déjà connu.
+  let merchantId = sub.metadata?.merchant_id ?? null;
+  if (!merchantId && customerId) {
+    const { data } = await admin
+      .from("merchant_plan")
+      .select("merchant_id")
+      .eq("stripe_customer_id", customerId)
+      .limit(1);
+    merchantId = (data?.[0]?.merchant_id as string | undefined) ?? null;
+  }
+  if (!merchantId) {
+    console.error("stripe-webhook subscription sans merchant_id", sub.id, customerId);
+    return;
+  }
+
+  const deleted = eventType === "customer.subscription.deleted";
+  const status: PlanStatus = deleted ? "canceled" : planStatus(sub.status);
+  const isPro = status === "active" || status === "past_due";
+  const periodEnd = sub.current_period_end
+    ? new Date(sub.current_period_end * 1000).toISOString()
+    : null;
+
+  // Le customer de facturation est créé par merchant-subscribe : on ne l'écrase
+  // jamais avec la valeur d'un événement (un customer inconnu ferait ensuite
+  // échouer le Checkout « No such customer »). On le complète seulement s'il
+  // manque encore.
+  const { data: existing } = await admin
+    .from("merchant_plan")
+    .select("stripe_customer_id")
+    .eq("merchant_id", merchantId)
+    .single();
+
+  await admin.from("merchant_plan").upsert({
+    merchant_id: merchantId,
+    plan: isPro ? "pro" : "free",
+    status,
+    stripe_customer_id: (existing?.stripe_customer_id as string | null) ?? customerId,
+    // Conservé même après résiliation (traçage ; remplacé par le prochain abonnement).
+    stripe_subscription_id: sub.id ?? null,
+    // La période n'est renseignée que pour un abonnement réellement en cours.
+    current_period_end: isPro ? periodEnd : null,
+  }, { onConflict: "merchant_id" });
+}
 
 Deno.serve(async (req: Request) => {
   const preflight = handleOptions(req);
@@ -117,6 +200,13 @@ Deno.serve(async (req: Request) => {
             status: "succeeded",
           });
         }
+        break;
+      }
+
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted": {
+        await syncMerchantPlan(admin, event.type, obj);
         break;
       }
 

@@ -39,3 +39,14 @@ export function confirmPickup(groupOrderId: string, noShowUserIds: string[]) {
     no_show_user_ids: noShowUserIds,
   });
 }
+
+/**
+ * Abonnement commerçant (palier pro) : session Stripe Checkout d'abonnement.
+ * Voizy se rémunère par abonnement — jamais par une commission sur les ventes.
+ */
+export function merchantSubscribe(merchantId: string, returnUrl: string) {
+  return callEdge<{ ok: boolean; url?: string; session_id?: string; error?: string }>(
+    "merchant-subscribe",
+    { merchant_id: merchantId, return_url: returnUrl },
+  );
+}

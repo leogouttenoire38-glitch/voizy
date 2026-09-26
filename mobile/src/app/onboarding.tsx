@@ -79,6 +79,13 @@ export default function OnboardingScreen() {
           Voizy fonctionne entre voisins : indiquez votre quartier pour voir les
           commerçants partenaires et les commandes groupées autour de chez vous.
         </Text>
+        <View style={styles.promise}>
+          <Text style={styles.promiseTitle}>0 % de commission sur vos ventes, pour toujours</Text>
+          <Text style={styles.promiseText}>
+            Les commerçants gardent 100 % de leurs ventes, hors frais bancaires
+            standards. Voizy se rémunère par abonnement, jamais sur les transactions.
+          </Text>
+        </View>
       </View>
 
       <Button
@@ -126,6 +133,14 @@ const styles = StyleSheet.create({
   logo: { fontSize: 36, fontWeight: "900", color: colors.brand, letterSpacing: 1.5, fontFamily: fonts.extraBold },
   title: { fontSize: fontSizes.title, fontWeight: "800", color: colors.ink, marginTop: 16, fontFamily: fonts.extraBold },
   subtitle: { fontSize: fontSizes.body, color: colors.inkMuted, lineHeight: lineHeights.body, marginTop: 8, fontFamily: fonts.regular },
+  promise: {
+    marginTop: spacing.lg,
+    backgroundColor: colors.brandSoft,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  promiseTitle: { fontSize: fontSizes.body, color: colors.ink, fontFamily: fonts.semiBold },
+  promiseText: { fontSize: fontSizes.bodySmall, color: colors.inkMuted, lineHeight: lineHeights.bodySmall, marginTop: 4, fontFamily: fonts.regular },
   divider: { flexDirection: "row", alignItems: "center", marginVertical: spacing.lg },
   dividerLine: { flex: 1, height: 1, backgroundColor: colors.borderStrong },
   dividerText: { marginHorizontal: spacing.md, color: colors.inkMuted, fontSize: fontSizes.body, fontFamily: fonts.medium },

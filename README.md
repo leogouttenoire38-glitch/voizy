@@ -6,7 +6,8 @@ chez un commerçant de proximité et débloquer un tarif préférentiel, avec un
 retrait — conforme au cahier des charges (`cahier_des_charges_voizy.md`, MVP §6.1).
 
 > MVP livré : schéma + RLS + RPC Supabase (verrous atomiques anti double
-> validation de seuil), 10 Edge Functions (Stripe Connect Express, géocodage,
+> validation de seuil), 9 Edge Functions (Stripe Connect Express + abonnement
+> commerçant Stripe Billing, **0 % de commission sur les ventes**, géocodage,
 > clôture de commandes, push), application mobile Expo complète en français,
 > back-office web commerçant.
 
@@ -18,7 +19,8 @@ retrait — conforme au cahier des charges (`cahier_des_charges_voizy.md`, MVP �
 |---|---|---|
 | Mobile | React Native + **Expo SDK 57** (expo-router, TypeScript) | `mobile/` — tous les écrans (organisateur + participant) |
 | Backend | **Supabase** (Postgres 15 + PostGIS, Auth, Realtime, Edge Functions) | `supabase/` |
-| Paiement | **Stripe Connect Express** (PaymentIntents *manual capture*, transfer **net** au commerçant via `transfer_data.amount` = montant − commission Voizy − **frais Stripe à la charge du commerçant**) | produit + caution |
+| Paiement | **Stripe Connect Express** (PaymentIntents *manual capture*, transfer **net** au commerçant via `transfer_data.amount` = montant − **frais Stripe uniquement**, **0 % de commission Voizy**) | produit + caution |
+| Revenu Voizy | **Stripe Billing** (abonnement commerçant free / pro, `merchant-subscribe` + webhook `customer.subscription.*`) — **jamais de pourcentage sur les ventes** | `merchant_plan` |
 | Push | Expo Notifications (cron `dispatch-notifications`) | seuil atteint / non atteint, rappel retrait, caution libérée |
 | Proximité | PostGIS `geography(Point)` + `ST_DWithin` | commerçants & commandes autour du quartier |
 | Back-office | Vite + React + supabase-js | `web/` — commandes confirmées, créneaux, no-show, stats |
@@ -29,18 +31,19 @@ voizy/
 ├── .env.example                  # clés Supabase / Stripe / Expo
 ├── supabase/
 │   ├── config.toml               # config CLI locale
-│   ├── migrations/               # 0001 → 0014 (schéma, RLS, RPC, triggers, seeds, correctifs)
+│   ├── migrations/               # 0001 → 0015 (schéma, RLS, RPC, triggers, seeds, correctifs, 0 % commission)
 │   └── functions/
 │       ├── _shared/              # cors, supabase admin, stripe (Connect), push, settle
 │       ├── geocode/              # adresse → lat/lng (Nominatim)
 │       ├── merchant-onboarding/  # compte Connect Express + lien d'onboarding (concierge)
+│       ├── merchant-subscribe/   # abonnement commerçant (Stripe Billing, palier pro)
 │       ├── setup-payment/        # enregistre la carte du participant (Checkout mode setup)
 │       ├── join-order/           # RPC atomique + 2 PaymentIntents (produit + caution)
 │       ├── settle-order/         # (logique partagée _shared/settle.ts) capture des paiements
 │       ├── close-order/          # cron : verrouillage à échéance + rappels retrait
 │       ├── confirm-pickup/       # retrait : caution libérée / no-show : caution capturée
 │       ├── dispatch-notifications/ # cron : notifications en attente → push Expo
-│       └── stripe-webhook/       # account.updated + payment_intent.* (HMAC vérifié)
+│       └── stripe-webhook/       # account.updated + payment_intent.* + customer.subscription.* (HMAC vérifié)
 ├── mobile/                       # app Expo (tous les écrans en français)
 └── web/                          # back-office commerçant (Vite + React)
 ```
@@ -48,13 +51,14 @@ voizy/
 ## Modèle de données
 
 `users` (profil + quartier GPS) · `merchants` (partenaires, compte Connect,
-commission, gestionnaire) · `offers` (produit + prix normal/groupé + seuil +
-caution) · `group_orders` (snapshots prix/seuil, `share_token`, statuts
-open → confirmed → completed | cancelled) · `participations` (2 PaymentIntents
-par participant) · `transactions` (journal ventilé : brut, commission Voizy,
-frais Stripe estimés/réels, net commerçant) · `notifications` · `push_tokens` — le tout
-protégé par RLS (participants pour une commande, gestionnaire pour un commerce,
-profil public sans email/téléphone).
+gestionnaire ; `commission_rate` conservé à **0**) · `offers` (produit + prix
+normal/groupé + seuil + caution) · `group_orders` (snapshots prix/seuil,
+`share_token`, statuts open → confirmed → completed | cancelled) ·
+`participations` (2 PaymentIntents par participant) · `transactions` (journal
+ventilé : brut, commission — **toujours 0 €**, frais Stripe estimés/réels, net
+commerçant) · `merchant_plan` (palier d'abonnement free / pro) · `notifications`
+· `push_tokens` — le tout protégé par RLS (participants pour une commande,
+gestionnaire pour un commerce, profil public sans email/téléphone).
 
 ### RLS : jamais de sous-requête croisée entre deux tables
 
@@ -135,8 +139,9 @@ Respecte le cahier des charges (§7.2) : séparation stricte entre la
 2. **Participation** : `join_order` (RPC atomique, verrou `SELECT … FOR UPDATE`)
    insère la participation, puis crée 2 PaymentIntents en **capture manuelle**
    (aucun débit) avec `transfer_data.destination` = compte du commerçant,
-   `on_behalf_of` et `transfer_data.amount` = montant − commission Voizy −
-   frais Stripe estimés (transfert **net** au commerçant) :
+   `on_behalf_of` et `transfer_data.amount` = montant − frais Stripe estimés
+   (**zéro commission Voizy** : le commerçant garde 100 % du prix, hors frais
+   bancaires standards) :
    - PI **produit** (prix groupé) — capturé quand le seuil est atteint ;
    - PI **caution** (pré-autorisation) — jamais débitée si le retrait a lieu.
 3. **Seuil atteint** → statut `confirmed` + capture idempotente des PI produit
@@ -189,21 +194,65 @@ attente de retrait » mentait à l'organisateur au moment du retrait. Le statut 
 tombe toujours à `ready`, même si la session ne peut pas être lue.
 
 
-## Modèle économique (qui paie quoi)
+## Modèle économique — Voizy ne prend JAMAIS de pourcentage sur les ventes
 
-- **Commission Voizy** : **5 %** du montant produit par défaut
-  (`app_config.commission_default`, `merchants.commission_rate` par commerçant,
-  snapshotée dans `group_orders.commission_rate` à la création de la commande).
+**Voizy ne prélève rien sur les transactions : 0 %, définitivement.** Le
+commerçant reçoit **100 % du prix produit**, moins les seuls **frais de
+traitement Stripe** (au coût réel, sans marge Voizy) — exactement ce qu'il
+paierait avec n'importe quel terminal bancaire. Les ventes d'un commerçant ne
+sont jamais une source de revenu pour Voizy.
+
+**Voizy se rémunère par un abonnement mensuel du commerçant** (Stripe Billing,
+débité sur sa propre carte, **séparé du flux marketplace**) :
+
+| Palier | Prix | Ce qu'il donne |
+|---|---|---|
+| **free** (par défaut) | 0 € | 1 commande groupée **active** à la fois |
+| **pro** | `app_config.pro_plan_price_eur` (29 € / mois par défaut) | Commandes **illimitées** + commerce **mis en avant** dans Découvrir (badge `is_pro`, tri prioritaire des feeds) |
+
+Le palier est stocké dans `merchant_plan` (`plan` = free/pro, `status`,
+`stripe_subscription_id`, `current_period_end`). Il est mis à jour par le
+webhook `customer.subscription.created/updated/deleted` — le back-office
+commerçant démarre l'abonnement via la fonction `merchant-subscribe` (session
+Stripe Checkout, `mode=subscription`).
+
+### Phase pilote : la facturation est désactivée (`billing_enabled = false`)
+
+`app_config.billing_enabled` vaut **false** par défaut : **tous les
+commerçants sont traités comme « pro », gratuitement** — aucune limite de
+commande active, aucune facturation réelle, mais le 0 % de commission
+s'applique déjà. L'infrastructure d'abonnement est en place et prête :
+
+```sql
+-- Le jour venu, activer la facturation (aucun redéploiement majeur) :
+update public.app_config set value = jsonb 'true', updated_at = now()
+ where key = 'billing_enabled';
+```
+
+Il faut alors aussi :
+1. créer un **Price** Stripe mensuel pour le palier pro et l'exposer aux Edge
+   Functions (`STRIPE_PRICE_PRO=price_…`, voir « Stripe — configuration ») ;
+2. ajuster au besoin `app_config.pro_plan_price_eur` (tarif affiché) ;
+3. laisser chaque commerçant souscrire depuis le back-office (« Passer au plan
+   Pro ») — ou l'abonner par API. Les commerçants sans abonnement repassent
+   alors automatiquement au palier gratuit (1 commande active).
+
+### Détail des frais (qui paie quoi)
+
+- **Commission Voizy** : **0 %**, définitivement. `app_config.commission_default`,
+  `merchants.commission_rate` et `group_orders.commission_rate` existent encore
+  (colonnes historiques du pilote) mais valent **0** pour tout ce qui est créé
+  après la migration `0015` — ces colonnes ne doivent jamais être remontées.
 - **Frais de traitement Stripe** (1,5 % + 0,25 € en zone euro, cartes UE
   standard) : **à la charge du commerçant**, comme sur un terminal classique.
   Les *destination charges* étant toujours facturées à la plateforme par
   Stripe (l'option « Stripe prélève les frais aux comptes connectés » ne
   concerne que les *direct charges*), le transfert au commerçant est réduit :
-  `transfer_data.amount` = montant − commission − frais. NB : `application_fee_amount`
-  et `transfer_data[amount]` étant mutuellement exclusifs côté Stripe, la
-  commission n'est pas un champ séparé mais entre dans le calcul du transfert
-  net. La plateforme reverse les frais sur sa part et ne conserve que la
-  commission (écart d'arrondi éventuel supporté par la plateforme).
+  `transfer_data.amount` = montant − frais Stripe estimés. NB :
+  `application_fee_amount` et `transfer_data[amount]` étant mutuellement
+  exclusifs côté Stripe, la réduction du transfert est le mécanisme qui fait
+  porter les frais au commerçant — la plateforme reverse les frais sur sa part
+  et ne conserve **rien** (écart d'arrondi éventuel supporté par la plateforme).
 - **Caution** : pré-autorisation **jamais débitée au retrait normal** → frais
   Stripe nuls, intégralement remboursée. En **no-show**, la capture supporte
   les frais Stripe, côté commerçant (même mécanisme de transfert réduit).
@@ -213,9 +262,8 @@ tombe toujours à `ready`, même si la session ne peut pas être lue.
 | Poste | Montant |
 |---|---|
 | Prix produit payé par le client | 9,50 € |
-| Commission Voizy (5 %) | − 0,48 € |
 | Frais Stripe produit (1,5 % + 0,25 €) | − 0,39 € |
-| **Net commerçant (produit)** | **8,63 €** |
+| **Net commerçant (produit)** | **9,11 €** (100 % du prix − frais bancaires, **0 € de commission**) |
 | Caution pré-autorisée | 4,00 € (aucun débit) |
 | Retrait effectué | caution libérée — frais 0 €, rien n'est débité |
 | No-show | 4,00 € capturés − 0,31 € de frais Stripe → net commerçant **3,69 €** |
@@ -234,22 +282,28 @@ est ventilé en base (migration `0012_fee_tracing.sql`) sur la ligne
 | Colonne | Sens |
 |---|---|
 | `gross_amount` | montant brut payé par le client |
-| `commission_amount` | commission Voizy (snapshot `group_orders.commission_rate`) |
+| `commission_amount` | commission Voizy — **toujours 0 €** (colonnes conservées pour la compta historique du pilote à 5 %) |
 | `stripe_fee_estimated` | frais estimés retenus sur le transfert (1,5 % + 0,25 €) |
 | `stripe_fee_real` | frais réels Stripe lus sur le `balance_transaction` (NULL si indispo) |
-| `net_transfer` | net commerçant = brut − commission − frais estimés (miroir de `transfer_data.amount`) |
+| `net_transfer` | net commerçant = brut − frais estimés (miroir exact de `transfer_data.amount`) |
 
-Somme de la commission Voizy sur une période :
+Compta Voizy — le revenu transactionnel est **nul par design**, le revenu
+d'abonnement est tracé dans des colonnes séparées :
 
 ```sql
 -- Vue compta (réservée au service_role / éditeur SQL — pas de grant client)
-select * from public.v_voizy_revenue_monthly;          -- mois, volume, commission, frais, net, marge Voizy
+-- commission : 0 € pour toute la période post-bascule (pilote 5 % : historique)
+-- subscription_merchants / subscription_revenue : abonnements pro du mois
+-- voizy_net = subscription_revenue + commission (jamais un % des ventes)
+select * from public.v_voizy_revenue_monthly;
 select * from public.v_voizy_transaction_breakdown;    -- détail par transaction (commerçant, commande)
 ```
 
 Le back-office commerçant affiche la synthèse du mois en cours via le RPC
-`merchant_commission_summary` (volume, commission Voizy, frais estimés, net
-commerçant) pour la transparence sur ce que Voizy prélève.
+`merchant_commission_summary` (volume, **commission 0 €**, frais estimés, net
+commerçant, palier d'abonnement) — avec la mention explicite « Commission Voizy
+sur vos ventes : 0 % — vous gardez 100 % de vos ventes, hors frais bancaires
+standards. »
 
 ## Tâches planifiées (cron)
 
@@ -270,8 +324,8 @@ curl -X POST http://127.0.0.1:54321/functions/v1/dispatch-notifications -H "Auth
 Valide de bout en bout (Supabase local + API Stripe de test réelle) : onboarding
 Connect + webhook signé, garde-fou commerçant non connecté, **course au seuil**
 (3 joins concurrents sur un seuil de 2 → exactement 2, compteur jamais dépassé),
-**2 PaymentIntents par participant** (produit capturé au seuil avec commission
-5 % ; frais Stripe à la charge du commerçant vérifiés sur le transfert, caution
+**2 PaymentIntents par participant** (produit capturé au seuil avec **0 % de
+commission** — transfert vérifié à 100 % du prix moins les frais Stripe, caution
 en pré-autorisation), **no-show** (caution capturée / libérée), **3-D Secure**
 (avortement propre, aucun débit), **seuil non atteint** (`close-order` →
 annulations + traces `release`), **RLS lue en tant qu'utilisateur authentifié**
@@ -291,12 +345,23 @@ de la vague précédente ne peuvent pas revenir). La sous-liste des participants
 d'une commande a la même garantie : un échec y est montré avec « Réessayer », il
 ne peut plus se déguiser en « Aucun participant en attente de retrait » alors que
 la commande existe — c'est l'organisateur qui décide des no-shows au retrait.
+Le scénario **L** verrouille le nouveau modèle économique : `commission_rate`
+snapshoté à 0 sur toute nouvelle commande, `commission_amount` = 0 € en base,
+`net_transfer` **égal au transfert Stripe réel** (9,11 € = 9,50 € − 0,39 € de
+frais, aucune commission cachée), pilote sans limite (`billing_enabled=false`),
+palier gratuit refusé à la 2ᵉ commande active avec un message clair, palier pro
+illimité + **premier dans Découvrir** malgré la distance, session Checkout
+d'abonnement créée (réservée au gestionnaire, customer de facturation conservé
+d'un abonnement à l'autre), webhook `customer.subscription.updated/deleted` →
+palier mis à jour en base (résolution par `metadata.merchant_id` **et** par
+customer, jamais écrasé), et compta (revenu transactionnel nul, abonnement
+tracé à part).
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 79 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 97 ✅ / 0 ❌ »
 ```
 
 Notes importantes :
@@ -317,8 +382,13 @@ Notes importantes :
 ## Stripe — configuration
 
 1. Clés de test : `STRIPE_SECRET_KEY=sk_test_…`, `STRIPE_WEBHOOK_SECRET=whsec_…`.
+   Pour le palier pro : `STRIPE_PRICE_PRO=price_…` (Price mensuel récurrent du
+   compte plateforme Voizy — utilisé par `merchant-subscribe`).
 2. Webhook (test puis live) pointé sur `https://<ref>.supabase.co/functions/v1/stripe-webhook`,
-   événements : `account.updated`, `payment_intent.succeeded`, `payment_intent.canceled`.
+   événements : `account.updated`, `payment_intent.succeeded`,
+   `payment_intent.canceled`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`
+   (les abonnements du palier pro : source de vérité de `merchant_plan`).
 3. **Comptes Connect** : lors de l'onboarding, indiquez un pays FR et des
    coordonnées de test ; en test mode aucun document n'est demandé.
 4. En local, exposer le webhook avec `supabase functions serve` + un tunnel
@@ -334,16 +404,17 @@ local reste indépendant :
 export SUPABASE_ACCESS_TOKEN=sbp_…
 supabase link --project-ref <ref>
 
-# 2. Pousser les migrations 0001 → 0014 (ordre identique à local)
+# 2. Pousser les migrations 0001 → 0015 (ordre identique à local)
 supabase db push
 
 # 3. Secrets des fonctions côté Cloud (mêmes noms qu'en local)
 supabase secrets set --project-ref <ref> \
-  STRIPE_SECRET_KEY=sk_test_… STRIPE_CURRENCY=eur STRIPE_WEBHOOK_SECRET=whsec_…
+  STRIPE_SECRET_KEY=sk_test_… STRIPE_CURRENCY=eur STRIPE_WEBHOOK_SECRET=whsec_… \
+  STRIPE_PRICE_PRO=price_…   # palier pro (facultatif tant que billing_enabled = false)
 
 # 4. Déployer les fonctions ; stripe-webhook SANS vérif JWT (appelé par Stripe)
 supabase functions deploy --use-api --project-ref <ref> close-order confirm-pickup \
-  dispatch-notifications geocode join-order merchant-onboarding setup-payment
+  dispatch-notifications geocode join-order merchant-onboarding merchant-subscribe setup-payment
 supabase functions deploy --use-api --no-verify-jwt --project-ref <ref> stripe-webhook
 ```
 
@@ -383,6 +454,10 @@ web pointe sur le Cloud via `web/.env.production` (`vite build --mode production
   le téléphone est collecté au profil ; l'auth est e-mail/mot de passe + lien magique.
 - Résolution de litige **manuelle** (dashboard Stripe) ; à automatiser en V2.
 - No-show : détection par l'organisateur/commerçant (pas encore de géofencing).
+- Facturation d'abonnement : désactivée pendant le pilote (`billing_enabled = false`).
+  Le moteur existe (palier pro, Checkout, webhook) mais tant qu'elle est inactive,
+  la limite « 1 commande active » du palier gratuit n'est pas appliquée — les
+  commerçants sont traités comme pro gratuitement.
 - Back-office : liste des commerces ouverte à tous les comptes connectés pendant
   la phase concierge (à restreindre à `manager_id = uid` en production).
 - Notifications push : Expo Push (FCM/APNs sous le capot) ; en Expo Go les push

@@ -5,13 +5,7 @@
 // par close-order (échéance atteinte), donc conçu pour être rejoué sans effet
 // de bord : chaque participation n'est capturée qu'une fois (product_captured_at).
 
-import { stripeGet, stripePost } from "./stripe.ts";
-
-interface OrderRow {
-  id: string;
-  status: string;
-  commission_rate: number;
-}
+import { stripeGet, stripePost, VOIZY_COMMISSION_RATE } from "./stripe.ts";
 
 interface ParticipationRow {
   id: string;
@@ -31,7 +25,7 @@ export async function settleOrder(
 ): Promise<{ captured: number; failed: number; error?: string }> {
   const { data: order } = await admin
     .from("group_orders")
-    .select("id, status, commission_rate")
+    .select("id, status")
     .eq("id", groupOrderId)
     .single();
   if (!order || order.status !== "confirmed") {
@@ -62,13 +56,14 @@ export async function settleOrder(
         .eq("stripe_ref", p.product_pi_id)
         .limit(1);
       if (!existing || existing.length === 0) {
-        // Décomposition économique — mêmes règles que join-order (le taux est
-        // le snapshot de la commande) pour que net_transfer == transfer_data.amount.
+        // Décomposition économique — mêmes règles que join-order pour que
+        // net_transfer == transfer_data.amount. Voizy ne prend JAMAIS de
+        // pourcentage sur les ventes : le net est le montant moins les seuls
+        // frais Stripe estimés (commission = 0, définitivement).
         const gross = Number(p.amount) ?? 0;
-        const rate = Number((order as OrderRow | null)?.commission_rate ?? 0.05);
-        const commission = Math.round(gross * 100 * rate) / 100;
+        const commission = VOIZY_COMMISSION_RATE * gross; // 0 — jamais de commission sur les ventes
         const feeEstimated = (Math.floor(Math.round(gross * 100) * 0.015) + 25) / 100;
-        const net = Math.round((gross - commission - feeEstimated) * 100) / 100;
+        const net = Math.round((gross - feeEstimated) * 100) / 100;
         const realFee = await readRealFee(captured, p.product_pi_id);
 
         await admin.from("transactions").insert({
@@ -77,6 +72,8 @@ export async function settleOrder(
           type: "product_payment",
           amount: p.amount,
           gross_amount: gross,
+          // Colonne conservée pour la compta historique (pilote 5 %) : toute
+          // nouvelle ligne vaut 0.
           commission_amount: commission,
           stripe_fee_estimated: feeEstimated,
           stripe_fee_real: realFee,

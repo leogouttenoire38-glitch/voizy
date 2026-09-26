@@ -6,18 +6,19 @@
 // 3. Vérifie que le participant a une carte enregistrée (setup-payment).
 // 4. Crée 2 PaymentIntents en CAPTURE MANUELLE (aucun débit tant qu'ils ne sont
 //    pas capturés) transférés vers le compte Connect du commerçant :
-//      - produit  : montant groupé — transfert NET au commerçant, commission
-//                   Voizy et frais Stripe déduits (voir ci-dessous)
+//      - produit  : montant groupé — le commerçant reçoit 100 % du prix,
+//                   moins les seuls frais Stripe estimés (voir ci-dessous)
 //      - caution  : pré-autorisation remboursable (libérée au retrait)
 //
-//    Les frais de traitement Stripe sont à la charge du commerçant :
-//    `transfer_data.amount` = montant − commission Voizy − frais Stripe estimés.
-//    Les destination charges étant TOUJOURS facturées à la plateforme par
-//    Stripe (l'option « Stripe prélève les frais aux comptes connectés » ne
-//    concerne que les direct charges), la réduction du transfert est le
-//    mécanisme qui fait porter les frais au commerçant. NB : Stripe interdit de
-//    combiner `application_fee_amount` et `transfer_data[amount]` (mutuellement
-//    exclusifs) — la commission est donc intégrée au calcul du transfert net.
+//    MODÈLE ÉCONOMIQUE — Voizy ne prend JAMAIS de pourcentage sur les ventes :
+//    `transfer_data.amount` = montant − frais Stripe estimés, rien d'autre.
+//    Aucune commission Voizy n'est déduite, ni maintenant ni jamais. Les frais
+//    de traitement Stripe sont à la charge du commerçant, comme avec un
+//    terminal bancaire classique. Les destination charges étant TOUJOURS
+//    facturées à la plateforme par Stripe (l'option « Stripe prélève les frais
+//    aux comptes connectés » ne concerne que les direct charges), la réduction
+//    du transfert est le mécanisme qui fait porter les frais au commerçant.
+//    Voizy se rémunère par l'abonnement du commerçant (merchant-subscribe).
 //    La caution n'est jamais débitée au retrait normal (annulation de
 //    pré-autorisation = zéro frais) ; en no-show, sa capture supporte les
 //    frais, côté commerçant.
@@ -31,7 +32,6 @@ import { handleOptions, json } from "../_shared/cors.ts";
 import { adminClient, currentUser } from "../_shared/supabase.ts";
 import {
   cents,
-  DEFAULT_COMMISSION_RATE,
   ensureCustomer,
   firstCard,
   stripePost,
@@ -54,7 +54,6 @@ interface OrderRow {
   participants_current: number;
   threshold: number;
   title: string;
-  commission_rate: number;
 }
 
 Deno.serve(async (req: Request) => {
@@ -115,9 +114,10 @@ Deno.serve(async (req: Request) => {
     };
 
     // ---- 2. Compte Connect du commerçant
-    // NB : le taux de commission utilisé est le SNAPSHOT de la commande
-    // (order.commission_rate, figé à la création) — c'est lui qui est aussi
-    // retracé par settle dans transactions.commission_amount.
+    // NB : aucune commission n'intervient ici — Voizy ne prend jamais de
+    // pourcentage sur les ventes (voir en-tête). Le snapshot historique
+    // order.commission_rate existe encore en base mais vaut toujours 0 et
+    // n'est plus lu.
     const { data: merchant } = await admin
       .from("merchants")
       .select("stripe_account_id, status")
@@ -161,13 +161,11 @@ Deno.serve(async (req: Request) => {
     };
 
     const productAmount = cents(participation.amount);
-    const rate = Number(order.commission_rate ?? DEFAULT_COMMISSION_RATE);
-    const commissionCents = Math.round(productAmount * rate); // commission Voizy (5 % par défaut)
     const productStripeFee = stripeProcessingFeeCents(productAmount); // frais Stripe, à la charge du commerçant
-    // Transfert net : montant − commission − frais Stripe (le commerçant reçoit
-    // ce qu'il aurait sur un terminal classique ; la plateforme reverse les
-    // frais sur sa part et conserve la commission).
-    const productTransfer = Math.max(0, productAmount - commissionCents - productStripeFee);
+    // Transfert net : montant − frais Stripe UNIQUEMENT. Zéro commission Voizy
+    // (0 %, définitivement) : le commerçant garde 100 % du prix produit, hors
+    // frais bancaires standards — exactement comme sur un terminal classique.
+    const productTransfer = Math.max(0, productAmount - productStripeFee);
 
     const depositAmount = cents(participation.deposit_amount);
     const depositStripeFee = stripeProcessingFeeCents(depositAmount); // prélevés seulement si capturée (no-show)

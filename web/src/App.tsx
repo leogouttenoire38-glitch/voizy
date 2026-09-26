@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
-import { confirmPickup, merchantOnboarding } from "./api";
+import { confirmPickup, merchantOnboarding, merchantSubscribe } from "./api";
 import type { Session } from "@supabase/supabase-js";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +12,6 @@ interface Merchant {
   address: string;
   status: string;
   stripe_account_id: string | null;
-  commission_rate: number;
 }
 
 interface OrderRow {
@@ -52,8 +51,19 @@ interface CommissionSummary {
     volume: number;
     commission: number;
     fees_estimated: number;
+    fees_real: number;
     net: number;
     transactions: number;
+  };
+  commission_rate_percent: number;
+  policy: string;
+  billing: {
+    enabled: boolean;
+    plan: "free" | "pro";
+    status: string;
+    is_pro: boolean;
+    current_period_end: string | null;
+    pro_price_eur: number | null;
   };
 }
 
@@ -148,6 +158,10 @@ function Login({ onDone }: { onDone: () => void }) {
       <div className="card login-card">
         <h1 className="logo">VOIZY</h1>
         <p className="tagline">Back-office commerçant</p>
+        <p className="muted small">
+          0 % de commission sur vos ventes, pour toujours — Voizy se rémunère par abonnement,
+          jamais sur vos transactions.
+        </p>
         <div className="field-group">
           <label className="field-label" htmlFor="login-email">E-mail</label>
           <input
@@ -258,6 +272,7 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [onboardingBusy, setOnboardingBusy] = useState(false);
+  const [subscribeBusy, setSubscribeBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -299,6 +314,23 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
     }
   };
 
+  const startSubscription = async () => {
+    setSubscribeBusy(true);
+    setError(null);
+    try {
+      const res = await merchantSubscribe(merchant.id, window.location.href);
+      if (res.ok && res.url) {
+        window.location.href = res.url; // Checkout Stripe (abonnement)
+      } else {
+        setError(res.error ?? "Impossible de démarrer l'abonnement.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur réseau.");
+    } finally {
+      setSubscribeBusy(false);
+    }
+  };
+
   const needsOnboarding = !merchant.stripe_account_id || merchant.status !== "active";
   const upcoming = orders.filter((o) => o.status === "confirmed");
   const history = orders.filter((o) => o.status === "completed" || o.status === "cancelled");
@@ -312,15 +344,49 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
             <strong>Paiements non activés.</strong> Complétez l'onboarding Stripe (connexion
             sécurisée, ~5 min) pour recevoir les paiements de vos commandes groupées.
           </p>
+          <p className="muted">
+            0 % de commission sur vos ventes, pour toujours — vous gardez 100 % de vos ventes, hors
+            frais bancaires standards.
+          </p>
           <button className="primary" onClick={startOnboarding} disabled={onboardingBusy}>
             {onboardingBusy ? "Création du lien…" : "Lancer l'onboarding Stripe ↗"}
           </button>
         </div>
       ) : (
         <div className="card banner ok">
-          <p>✅ Paiements actifs — commission Voizy : {(merchant.commission_rate * 100).toFixed(0)} %</p>
+          <p>
+            ✅ Paiements actifs — commission Voizy sur vos ventes : 0 % — vous gardez 100 % de vos
+            ventes, hors frais bancaires standards.
+          </p>
         </div>
       )}
+
+      {comm?.billing ? (
+        <div className="card">
+          <p>
+            <strong>{comm.billing.is_pro ? "Plan Pro" : "Plan gratuit"}</strong>{" "}
+            {comm.billing.is_pro
+              ? "— commandes illimitées, commerce mis en avant dans Découvrir."
+              : "— 1 commande groupée active à la fois."}
+          </p>
+          {!comm.billing.enabled ? (
+            <p className="muted">
+              Phase pilote : la facturation n'est pas encore activée — le plan Pro est offert à tous
+              les commerçants (commandes illimitées, aucune facturation).
+            </p>
+          ) : comm.billing.is_pro ? null : (
+            <>
+              <p className="muted">
+                Passez au plan Pro ({fmtEuro(comm.billing.pro_price_eur ?? 0)} / mois) pour des
+                commandes illimitées et la mise en avant dans Découvrir.
+              </p>
+              <button className="primary" onClick={startSubscription} disabled={subscribeBusy}>
+                {subscribeBusy ? "Ouverture…" : "Passer au plan Pro ↗"}
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {error ? <p className="error">{error}</p> : null}
 
@@ -340,12 +406,15 @@ function MerchantPanel({ merchant, refreshKey, onChanged }: { merchant: Merchant
           {comm?.current_month && comm.current_month.transactions > 0 ? (
             <div className="card">
               <p>
-                <strong>Ce mois-ci</strong> · volume {fmtEuro(comm.current_month.volume)} ·{" "}
-                commission Voizy {fmtEuro(comm.current_month.commission)} · frais Stripe (est.){" "}
-                {fmtEuro(comm.current_month.fees_estimated)} · net commerçant{" "}
-                {fmtEuro(comm.current_month.net)} (sur {comm.current_month.transactions} paiement
-                {comm.current_month.transactions > 1 ? "s" : ""} capturé
+                <strong>Ce mois-ci</strong> · volume {fmtEuro(comm.current_month.volume)} · net
+                commerçant {fmtEuro(comm.current_month.net)} · frais Stripe (est.){" "}
+                {fmtEuro(comm.current_month.fees_estimated)} (sur {comm.current_month.transactions}{" "}
+                paiement{comm.current_month.transactions > 1 ? "s" : ""} capturé
                 {comm.current_month.transactions > 1 ? "s" : ""})
+              </p>
+              <p className="muted">
+                Commission Voizy sur vos ventes : 0 % — vous gardez 100 % de vos ventes, hors frais
+                bancaires standards.
               </p>
             </div>
           ) : null}

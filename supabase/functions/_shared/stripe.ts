@@ -7,17 +7,22 @@
 // Flux Connect Express (paiement vers le commerçant) : les PaymentIntents sont
 // créés avec `transfer_data.destination` = compte Connect du commerçant,
 // `on_behalf_of` = même compte, et `transfer_data.amount` = montant NET
-// transféré au commerçant (montant − commission Voizy − frais Stripe).
+// transféré au commerçant.
 //
-// Schéma de frais : les frais de traitement Stripe sont supportés par le
-// commerçant (comme sur un terminal classique). Les destination charges sont
-// TOUJOURS facturées à la plateforme par Stripe (quelle que soit la valeur de
-// `controller.fees.payer`, qui ne concerne que les direct charges), et Stripe
-// interdit de combiner `application_fee_amount` avec `transfer_data[amount]`
-// (paramètres mutuellement exclusifs). La façon de faire porter les frais au
-// commerçant est donc de réduire le transfert : `transfer_data.amount` =
-// montant − commission Voizy − frais Stripe estimés. La plateforme reverse
-// alors les frais sur sa part et ne conserve que sa commission.
+// MODÈLE ÉCONOMIQUE — Voizy ne prend JAMAIS de pourcentage sur les ventes :
+// `transfer_data.amount` = montant − frais Stripe estimés, rien d'autre. Le
+// commerçant reçoit 100 % du prix produit, moins les seuls frais de traitement
+// bancaire (au coût réel, sans marge Voizy) — comme avec un terminal classique.
+// Voizy se rémunère par l'ABONNEMENT du commerçant (Stripe Billing, voir
+// merchant-subscribe), jamais par transaction.
+//
+// Pourquoi réduire le transfert plutôt que facturer une commission : les
+// destination charges sont TOUJOURS débitées à la plateforme par Stripe (quelle
+// que soit la valeur de `controller.fees.payer`, qui ne concerne que les direct
+// charges) et Stripe interdit de combiner `application_fee_amount` avec
+// `transfer_data[amount]` (paramètres mutuellement exclusifs). La réduction du
+// transfert est donc le mécanisme qui fait porter les frais au commerçant : la
+// plateforme reverse les frais Stripe sur sa part et ne conserve RIEN.
 
 const BASE = "https://api.stripe.com";
 
@@ -129,16 +134,24 @@ export function cents(amount: number | null | undefined): number {
   return Math.round(Number(amount ?? 0) * 100);
 }
 
-// Commission par défaut appliquée aux commandes (5 %) — le taux réel d'un
-// commerçant est stocké dans `merchants.commission_rate` (snapshoté dans
-// `group_orders.commission_rate` à la création de la commande).
-export const DEFAULT_COMMISSION_RATE = 0.05;
+/**
+ * Commission Voizy sur les ventes : 0, DÉFINITIVEMENT.
+ *
+ * Voizy ne prend jamais de pourcentage sur les transactions — le commerçant
+ * garde 100 % de ses ventes, hors frais bancaires standards. Cette constante
+ * n'existe que pour tracer explicitement cette politique (colonnes historiques
+ * `commission_rate` / `commission_amount`, conservées à 0) : elle ne doit
+ * JAMAIS être remontée. Le revenu de Voizy vient de l'abonnement commerçant
+ * (`merchant_plan`, voir merchant-subscribe).
+ */
+export const VOIZY_COMMISSION_RATE = 0;
 
 /**
  * Estimation des frais de traitement Stripe (zone euro, cartes UE standard) :
  * 1,5 % + 0,25 €. Partie pourcentage tronquée au centime (9,50 € → 0,14 +
- * 0,25 = 0,39 €). Supportés par le commerçant via transfer_data.amount ; un
- * écart éventuel (interchange, devise) reste à la charge de la plateforme.
+ * 0,25 = 0,39 €). Supportés par le commerçant via transfer_data.amount (c'est
+ * la SEULE déduction du transfert : aucune commission Voizy) ; un écart
+ * éventuel (interchange, devise) reste à la charge de la plateforme.
  */
 export function stripeProcessingFeeCents(amountCents: number): number {
   return Math.floor(amountCents * 0.015) + 25;

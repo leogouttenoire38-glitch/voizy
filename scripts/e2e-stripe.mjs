@@ -11,7 +11,7 @@
 //      compteur intact
 //   C. Course au seuil : 3 participants concurrents sur un seuil de 2 →
 //      exactement 2 validés, commande confirmée, 2 PIs produit CAPTURÉS
-//      (commission Voizy + frais Stripe à la charge du commerçant), 2 PIs
+//      (transfert = montant − frais Stripe, ZÉRO commission Voizy), 2 PIs
 //      caution NON capturés (pré-autorisation, transfert réduit des frais)
 //   D. No-show : caution du no-show CAPTURÉE, caution du présent LIBÉRÉE
 //   E. 3-D Secure : échec propre — PIs annulés, compteur intact
@@ -41,6 +41,13 @@
 //      français + un bouton « Réessayer », jamais un chargement infini ni un
 //      « aucun résultat » mensonger. Garde-fous sur les écrans et sur
 //      mobile/src/lib/auth.tsx (statut toujours résolu).
+//   L. Modèle économique 0 % : commission_rate = 0 sur toute nouvelle
+//      commande, commission_amount = 0 en base et transfert Stripe = 100 % du
+//      prix − frais Stripe (aucune commission cachée). Paliers d'abonnement :
+//      pilote (billing_enabled = false) sans limite ; billing activé + plan
+//      free → 1 seule commande active (2e refusée, message clair) ; plan pro →
+//      illimité + mis en avant ; webhook customer.subscription.* → palier ;
+//      compta : revenu transactionnel nul, abonnement tracé séparément.
 //
 // Usage :
 //   1. supabase start && supabase db reset
@@ -323,7 +330,7 @@ function writeConnectState(state) {
 // sandbox : DOB 1901-01-01 et adresse « address_full_match ». Les comptes Express
 // exigent l'onboarding hébergé (KYC par le titulaire) — non automatisable par API.
 // L'E2E provisionne donc un compte Custom (controller=application) 100 % par API :
-// c'est le même moteur de paiement (transferts, commissions, cautions) qui est
+// c'est le même moteur de paiement (transferts, cautions, frais Stripe) qui est
 // ensuite exercé en C-F. En production, le parcours concierge reste Express
 // (merchant-onboarding → lien hébergé → webhook account.updated).
 const INDIVIDUAL_TEST = {
@@ -496,20 +503,20 @@ async function scenarioC() {
   const paid = parts.filter((p) => p.status === "paid");
   check("2 participations « paid », 0 en attente", paid.length === 2 && parts.every((p) => p.status === "paid"));
 
-  // Paiements côté Stripe
-  // Produit 9,50 € : commission Voizy 5 % = 0,48 € et frais Stripe estimés
-  // 1,5 % + 0,25 € = 0,39 € sont nets du transfert (application_fee_amount et
+  // Paiements côté Stripe — modèle « 0 % commission »
+  // Produit 9,50 € : frais Stripe estimés 1,5 % + 0,25 € = 0,39 € sont la
+  // SEULE déduction du transfert (application_fee_amount et
   // transfer_data[amount] étant mutuellement exclusifs côté Stripe) → le
-  // commerçant reçoit 9,50 − 0,48 − 0,39 = 8,63 €. Caution 5,00 € : transfert
-  // réduit des frais (0,32 €) = 4,68 € — prélevés uniquement si la caution est
-  // capturée (no-show).
+  // commerçant reçoit 9,50 − 0,39 = 9,11 € (100 % du prix, zéro commission
+  // Voizy). Caution 5,00 € : transfert réduit des frais (0,32 €) = 4,68 € —
+  // prélevés uniquement si la caution est capturée (no-show).
   let prodOk = 0;
   let depOk = 0;
   for (const p of paid) {
     const prod = await getPi(p.product_pi_id);
     const dep = await getPi(p.deposit_pi_id);
     const ok1 = prod.status === "succeeded" && prod.amount_received === 950 &&
-      prod.transfer_data?.amount === 863;
+      prod.transfer_data?.amount === 911;
     const ok2 = dep.status === "requires_capture" && dep.amount_capturable === 500 &&
       dep.transfer_data?.amount === 468;
     if (ok1) prodOk++;
@@ -517,15 +524,35 @@ async function scenarioC() {
     if (!ok1) note(`PI produit ${prod.id} : status=${prod.status} reçu=${prod.amount_received} transfer=${prod.transfer_data?.amount}`);
     if (!ok2) note(`PI caution ${dep.id} : status=${dep.status} capturable=${dep.amount_capturable} transfer=${dep.transfer_data?.amount}`);
   }
-  check("2 PIs produit CAPTURÉS (9,50 € → net commerçant 8,63 € = − commission 5 % 0,48 € − frais Stripe 0,39 €)", prodOk === 2);
+  check("2 PIs produit CAPTURÉS (9,50 € → net commerçant 9,11 € = 100 % − frais Stripe 0,39 €, 0 commission)", prodOk === 2);
   check("2 PIs caution en pré-autorisation (jamais débités, transfert 4,68 €)", depOk === 2);
 
   const txs = await dbSelect(
     "transactions",
-    `select=type,amount,status&participation_id=in.(${paid.map((p) => `"${p.id}"`).join(",")})`,
+    `select=type,amount,status,gross_amount,commission_amount,stripe_fee_estimated,net_transfer,stripe_ref&participation_id=in.(${paid.map((p) => `"${p.id}"`).join(",")})`,
   );
   const prodTxs = txs.filter((t) => t.type === "product_payment");
   check("2 transactions product_payment tracées", prodTxs.length === 2, txs.map((t) => t.type).join(", "));
+
+  // Le net écrit en base est le miroir EXACT du transfert demandé à Stripe :
+  // aucun centime de commission Voizy ne peut se cacher dans le calcul.
+  const txByRef = new Map(prodTxs.map((t) => [t.stripe_ref, t]));
+  const mirror = prodTxs.length === 2 && paid.every((p) => {
+    const t = txByRef.get(p.product_pi_id);
+    return Boolean(t) && Math.round(Number(t.net_transfer) * 100) === 911;
+  });
+  check("net_transfer en base = transfert Stripe réel (9,11 € = 9,50 € − 0,39 € de frais)", mirror);
+  check(
+    "commission_amount = 0 € sur chaque paiement produit (0 %, définitivement)",
+    prodTxs.length === 2 && prodTxs.every((t) => Number(t.commission_amount) === 0),
+    prodTxs.map((t) => `${t.commission_amount} €`).join(", "),
+  );
+  check(
+    "gross_amount = prix payé et snapshot de commande à 0 %",
+    prodTxs.length === 2 && prodTxs.every((t) => Number(t.gross_amount) === 9.5) &&
+      Number(order.commission_rate) === 0,
+    `snapshot=${order.commission_rate}`,
+  );
 }
 
 // ============================================================================
@@ -1305,9 +1332,235 @@ async function scenarioK() {
 }
 
 // ============================================================================
+// Scénario L — Modèle économique 0 % + abonnement commerçant (paliers)
+// ============================================================================
+async function scenarioL() {
+  console.log("\n=== L. 0 % de commission sur les ventes + paliers d'abonnement ===");
+  const camille = await authUser("organisateur@voizy.test", "Camille");
+
+  // --- 1. Décomposition d'un paiement produit réellement capturé (scénario C)
+  const latestTx = (await dbSelect(
+    "transactions",
+    "select=type,gross_amount,commission_amount,stripe_fee_estimated,net_transfer,stripe_ref" +
+      "&type=eq.product_payment&order=created_at.desc&limit=1",
+  ))[0];
+  if (latestTx) {
+    const fee = Number(latestTx.stripe_fee_estimated);
+    check(
+      "paiement capturé : commission 0 € et net = 100 % du prix − frais Stripe",
+      Number(latestTx.commission_amount) === 0 &&
+        Math.abs(Number(latestTx.net_transfer) - (Number(latestTx.gross_amount) - fee)) < 0.005,
+      `brut ${latestTx.gross_amount} € − frais ${fee} € = net ${latestTx.net_transfer} €`,
+    );
+  } else {
+    note("aucune transaction produit en base (scénario L isolé) : décomposition vérifiée par le scénario C");
+  }
+
+  // --- 2. Commission annulée : le créateur ne peut plus créer de commande à 5 %
+  const offer = (await dbSelect("offers", `select=id&merchant_id=eq.${PRIMEUR}&limit=1`))[0];
+  const pilotOrder = await createOrder(camille.access_token, PRIMEUR, offer.id);
+  check(
+    "toute nouvelle commande naît à commission_rate = 0 (plus de 5 %)",
+    Number(pilotOrder.commission_rate) === 0,
+    String(pilotOrder.commission_rate),
+  );
+
+  // --- 3. Pilote : billing_enabled = false → aucune limite (tous « pro »)
+  const pilotOrder2 = await createOrder(camille.access_token, PRIMEUR, offer.id);
+  check(
+    "pilote (billing_enabled = false) : 2 commandes actives à la fois autorisées",
+    pilotOrder2?.status === "open",
+    pilotOrder2?.id,
+  );
+
+  // --- 4. Billing activé + palier gratuit → 1 seule commande active
+  const cancelOpen = () =>
+    dbUpdate("group_orders", `merchant_id=eq.${PRIMEUR}&status=eq.open`, {
+      status: "cancelled",
+      cancelled_at: new Date().toISOString(),
+      cancelled_reason: "threshold_not_reached",
+    });
+  await dbUpdate("app_config", "key=eq.billing_enabled", { value: true });
+  await dbUpdate("merchant_plan", `merchant_id=eq.${PRIMEUR}`, {
+    plan: "free",
+    status: "inactive",
+    current_period_end: null,
+  });
+  await cancelOpen();
+
+  const freeOrder = await rpcAsUser(
+    "create_group_order",
+    { p_merchant_id: PRIMEUR, p_offer_id: offer.id, p_pickup_at: future(), p_pickup_location: null },
+    camille.access_token,
+  );
+  check(
+    "palier gratuit : la 1re commande active est acceptée",
+    freeOrder.status === 200 && freeOrder.data?.ok === true,
+    JSON.stringify(freeOrder.data)?.slice(0, 120),
+  );
+  const freeOrder2 = await rpcAsUser(
+    "create_group_order",
+    { p_merchant_id: PRIMEUR, p_offer_id: offer.id, p_pickup_at: future(), p_pickup_location: null },
+    camille.access_token,
+  );
+  const freeMsg = String(freeOrder2.data?.message ?? freeOrder2.data?.error ?? "");
+  check(
+    "palier gratuit : la 2e commande active est refusée (message clair, pas de limite silencieuse)",
+    freeOrder2.status >= 400 && /gratuit/i.test(freeMsg) && /pro/i.test(freeMsg),
+    freeMsg.slice(0, 160),
+  );
+
+  // --- 5. Palier pro : commandes illimitées + mise en avant dans Découvrir
+  await dbUpdate("merchant_plan", `merchant_id=eq.${PRIMEUR}`, {
+    plan: "pro",
+    status: "active",
+    current_period_end: new Date(Date.now() + 30 * 86400_000).toISOString(),
+  });
+  const proOrder2 = await rpcAsUser(
+    "create_group_order",
+    { p_merchant_id: PRIMEUR, p_offer_id: offer.id, p_pickup_at: future(), p_pickup_location: null },
+    camille.access_token,
+  );
+  check(
+    "palier pro : plus aucune limite de commandes actives",
+    proOrder2.status === 200 && proOrder2.data?.ok === true,
+    JSON.stringify(proOrder2.data)?.slice(0, 120),
+  );
+
+  // PRIMEUR est plus loin que l'Épicerie du point de référence (Aligre) : s'il
+  // passe premier, c'est bien la mise en avant du palier pro qui l'emporte.
+  const nearby = await rpcAsUser(
+    "nearby_merchants",
+    { p_lat: 48.8499, p_lng: 2.3756, p_radius_m: 3000, p_limit: 50 },
+    camille.access_token,
+  );
+  const merchants = Array.isArray(nearby.data) ? nearby.data : [];
+  const primeurRow = merchants.find((m) => m.id === PRIMEUR);
+  const epicerieIdx = merchants.findIndex((m) => m.id === EPICERIE);
+  check(
+    "Découvrir : le commerçant pro passe devant (badge is_pro) malgré la distance",
+    merchants[0]?.id === PRIMEUR && primeurRow?.is_pro === true && epicerieIdx > 0,
+    `1er=${merchants[0]?.name ?? "?"} (${merchants[0]?.distance_m ?? "?"} m), Épicerie #${epicerieIdx + 1}`,
+  );
+
+  const feed = await rpcAsUser(
+    "open_orders_feed",
+    { p_lat: 48.8499, p_lng: 2.3756, p_radius_m: 3000, p_limit: 50 },
+    camille.access_token,
+  );
+  const feedRows = Array.isArray(feed.data) ? feed.data : [];
+  check(
+    "Découvrir : les commandes du commerçant pro sont en tête du flux",
+    feedRows.length >= 2 && feedRows[0]?.merchant_id === PRIMEUR && feedRows[0]?.merchant_is_pro === true,
+    `${feedRows.length} commandes ouvertes, 1re = ${feedRows[0]?.merchant_name ?? "?"}`,
+  );
+
+  // --- 6. Abonnement Stripe Billing (hors flux marketplace)
+  const forbidden = await callFn("merchant-subscribe", { merchant_id: PRIMEUR }, camille.access_token);
+  check(
+    "abonnement : refusé à un utilisateur qui n'est pas le gestionnaire du commerce",
+    forbidden.status === 403,
+    `status=${forbidden.status}`,
+  );
+
+  const product = await stripeReq("POST", "/v1/products", { name: "Voizy Pro (E2E)" });
+  const price = await stripeReq("POST", "/v1/prices", {
+    product: product.id,
+    currency: "eur",
+    unit_amount: 2900,
+    "recurring[interval]": "month",
+  });
+  const checkout = await callFn(
+    "merchant-subscribe",
+    { merchant_id: PRIMEUR, return_url: "http://127.0.0.1:5173/", price_id: price.id },
+    SERVICE,
+  );
+  check(
+    "session Checkout d'abonnement créée (Stripe Billing, jamais Connect)",
+    checkout.status === 200 && checkout.data?.ok === true &&
+      String(checkout.data?.url ?? "").startsWith("https://checkout.stripe.com"),
+    String(checkout.data?.url ?? checkout.data?.error ?? "").slice(0, 64),
+  );
+  const billingCustomer = (await dbSelect(
+    "merchant_plan",
+    `select=stripe_customer_id&merchant_id=eq.${PRIMEUR}`,
+  ))[0]?.stripe_customer_id;
+  check(
+    "customer de facturation réel créé et conservé (réutilisé au prochain passage)",
+    String(billingCustomer ?? "").startsWith("cus_"),
+    String(billingCustomer ?? "").slice(0, 20),
+  );
+
+  // --- 7. Webhook : le palier suit l'abonnement (source de vérité)
+  const subId = `sub_e2e_${Date.now()}`;
+  const periodEnd = Math.floor(Date.now() / 1000) + 30 * 86400;
+  // Volontairement SANS metadata.merchant_id : le webhook doit retrouver le
+  // commerçant par son customer de facturation (chemin de repli).
+  const whUp = await sendWebhook("customer.subscription.updated", {
+    id: subId,
+    object: "subscription",
+    customer: billingCustomer,
+    status: "active",
+    current_period_end: periodEnd,
+  });
+  const planUp = (await dbSelect(
+    "merchant_plan",
+    `select=plan,status,current_period_end,stripe_subscription_id,stripe_customer_id&merchant_id=eq.${PRIMEUR}`,
+  ))[0];
+  check(
+    "webhook customer.subscription.updated → palier pro actif (résolu par customer)",
+    whUp.status === 200 && planUp.plan === "pro" && planUp.status === "active" &&
+      planUp.stripe_subscription_id === subId && planUp.stripe_customer_id === billingCustomer,
+    JSON.stringify(planUp),
+  );
+
+  const revenue = (await dbSelect(
+    "v_voizy_revenue_monthly",
+    "select=month,commission,subscription_merchants,subscription_revenue,voizy_net&order=month.desc&limit=1",
+  ))[0];
+  check(
+    "compta : revenu transactionnel nul (commission 0 €), abonnement tracé à part",
+    Number(revenue?.commission ?? -1) === 0 &&
+      Number(revenue?.subscription_merchants ?? 0) >= 1 &&
+      Number(revenue?.subscription_revenue ?? 0) > 0 &&
+      Number(revenue?.voizy_net ?? 0) === Number(revenue?.subscription_revenue ?? 0),
+    JSON.stringify(revenue),
+  );
+
+  const whDown = await sendWebhook("customer.subscription.deleted", {
+    id: subId,
+    object: "subscription",
+    customer: "cus_e2e_voizy",
+    status: "canceled",
+    metadata: { merchant_id: PRIMEUR },
+  });
+  const planDown = (await dbSelect(
+    "merchant_plan",
+    `select=plan,status,stripe_customer_id&merchant_id=eq.${PRIMEUR}`,
+  ))[0];
+  check(
+    "webhook customer.subscription.deleted → retour au palier gratuit (customer conservé)",
+    whDown.status === 200 && planDown.plan === "free" && planDown.status === "canceled" &&
+      planDown.stripe_customer_id === billingCustomer,
+    JSON.stringify(planDown),
+  );
+
+  // --- 8. Nettoyage : on rend le pilote à son état par défaut
+  await cancelOpen();
+  await dbUpdate("merchant_plan", `merchant_id=eq.${PRIMEUR}`, {
+    plan: "free",
+    status: "inactive",
+    current_period_end: null,
+  });
+  await dbUpdate("app_config", "key=eq.billing_enabled", { value: false });
+  const pilot = (await dbSelect("app_config", "select=value&key=eq.billing_enabled"))[0];
+  check("nettoyage : facturation rédésactivée (pilote)", pilot?.value === false, String(pilot?.value));
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ, scenarioK];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ, scenarioK, scenarioL];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;
