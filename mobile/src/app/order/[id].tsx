@@ -11,11 +11,12 @@ import {
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Badge, Button, Card, Row, ScreenHeader, type BadgeTone } from "../../components/ui";
+import { Badge, Button, Card, LoadError, Row, ScreenHeader, type BadgeTone } from "../../components/ui";
 import { ProgressBar } from "../../components/ProgressBar";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
+import { attemptLoad } from "../../lib/load";
 import { confirmPickup, joinOrder } from "../../lib/api";
 import { startCardSetup } from "../../lib/checkout";
 import { orderShareMessage, orderShareUrl } from "../../lib/share";
@@ -45,6 +46,7 @@ export default function OrderScreen() {
   const [participants, setParticipants] = useState<Participation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const [joining, setJoining] = useState(false);
   const [needCard, setNeedCard] = useState(false);
@@ -56,56 +58,89 @@ export default function OrderScreen() {
   const orderId = useMemo(() => order?.id ?? null, [order]);
 
   const load = useCallback(async () => {
-    if (!id) return;
-
-    // id peut être un UUID (navigation interne) ou un share_token (lien partagé).
-    let { data, error: err } = await supabase
-      .from("group_orders")
-      .select("*, merchants(*), offers(title)")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (err || !data) {
-      const byToken = await supabase
-        .from("group_orders")
-        .select("*, merchants(*), offers(title)")
-        .eq("share_token", id)
-        .maybeSingle();
-      data = byToken.data;
-      err = byToken.error;
-    }
-
-    if (err || !data) {
-      setError(err?.message ?? "Commande introuvable.");
+    if (!id) {
       setLoading(false);
       return;
     }
+    const idVal = id;
+    const uidVal = uid;
+    // attemptLoad ne lève jamais (délai borné à 20 s via ./net) : la commande
+    // finit toujours par s'afficher ou par montrer un échec réessayable.
+    const res = await attemptLoad(async () => {
+      // id peut être un UUID (navigation interne) ou un share_token (lien partagé).
+      const byId = await supabase
+        .from("group_orders")
+        .select("*, merchants(*), offers(title)")
+        .eq("id", idVal)
+        .maybeSingle();
+      if (byId.error) throw byId.error;
+      let data = byId.data;
+      if (!data) {
+        const byToken = await supabase
+          .from("group_orders")
+          .select("*, merchants(*), offers(title)")
+          .eq("share_token", idVal)
+          .maybeSingle();
+        if (byToken.error) throw byToken.error;
+        data = byToken.data;
+      }
+      if (!data) {
+        return { order: null, myParticipation: null as Participation | null, participants: [] as Participation[] };
+      }
 
-    setOrder(data as unknown as OrderDetail);
-    setError(null);
+      // Ma participation + participants (pour la confirmation de retrait).
+      // Enrichissement tolérant : une erreur ici ne doit pas empêcher la
+      // commande de s'afficher.
+      let myParticipation: Participation | null = null;
+      let participants: Participation[] = [];
+      if (uidVal) {
+        const [partRes, partsRes] = await Promise.all([
+          supabase
+            .from("participations")
+            .select("*")
+            .eq("group_order_id", (data as { id: string }).id)
+            .eq("user_id", uidVal)
+            .maybeSingle(),
+          supabase
+            .from("participations")
+            .select("*")
+            .eq("group_order_id", (data as { id: string }).id)
+            .in("status", ["paid"]),
+        ]);
+        if (!partRes.error) myParticipation = (partRes.data as Participation | null) ?? null;
+        if (!partsRes.error) participants = (partsRes.data as Participation[]) ?? [];
+      }
+      return { order: data as unknown as OrderDetail, myParticipation, participants };
+    }, "Impossible de charger cette commande. Vérifiez votre connexion puis réessayez.");
 
-    // Ma participation + participants (pour la confirmation de retrait).
-    if (uid) {
-      const [partRes, partsRes] = await Promise.all([
-        supabase
-          .from("participations")
-          .select("*")
-          .eq("group_order_id", (data as { id: string }).id)
-          .eq("user_id", uid)
-          .maybeSingle(),
-        supabase
-          .from("participations")
-          .select("*")
-          .eq("group_order_id", (data as { id: string }).id)
-          .in("status", ["paid"]),
-      ]);
-      if (!partRes.error) setMyParticipation((partRes.data as Participation | null) ?? null);
-      if (!partsRes.error) setParticipants((partsRes.data as Participation[]) ?? []);
+    try {
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      if (!res.data.order) {
+        setOrder(null);
+        setError("Cette commande n'existe plus, ou le lien est incomplet.");
+        return;
+      }
+      setOrder(res.data.order);
+      setMyParticipation(res.data.myParticipation);
+      setParticipants(res.data.participants);
+      setError(null);
+    } finally {
+      // Toujours arrêter le chargement (même en cas d'échec inattendu) :
+      // l'écran peut alors afficher l'erreur et « Réessayer ».
+      setLoading(false);
+      setRetrying(false);
     }
-    setLoading(false);
   }, [id, uid]);
 
   useEffect(() => {
+    load();
+  }, [load]);
+
+  const retry = useCallback(() => {
+    setRetrying(true);
     load();
   }, [load]);
 
@@ -240,7 +275,11 @@ export default function OrderScreen() {
   if (!order) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.bigError}>{error ?? "Commande introuvable."}</Text>
+        <LoadError
+          message={error ?? "Cette commande n'existe plus, ou le lien est incomplet."}
+          onRetry={retry}
+          retrying={retrying}
+        />
         <Button title="Retour" variant="outline" onPress={() => router.back()} style={{ marginTop: spacing.md }} />
       </View>
     );

@@ -11,10 +11,11 @@ import {
 } from "react-native";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Button, Card, Field, ProgressSteps, Screen, ScreenHeader } from "../components/ui";
+import { Button, Card, Field, LoadError, ProgressSteps, Screen, ScreenHeader } from "../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../theme";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
+import { attemptLoad } from "../lib/load";
 import { orderShareMessage, orderShareUrl } from "../lib/share";
 import { formatDateTime, formatPrice } from "../lib/format";
 import type { Merchant, Offer } from "../types";
@@ -38,57 +39,106 @@ export default function NewOrderScreen() {
   const [showPicker, setShowPicker] = useState<"date" | "time" | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [merchantsError, setMerchantsError] = useState<string | null>(null);
+  const [offersError, setOffersError] = useState<string | null>(null);
+  const [reloadingMerchants, setReloadingMerchants] = useState(false);
+  const [reloadingOffers, setReloadingOffers] = useState(false);
+  // Incrémentés par « Réessayer » : relancent l'effet correspondant.
+  const [merchantsAttempt, setMerchantsAttempt] = useState(0);
+  const [offersAttempt, setOffersAttempt] = useState(0);
   const [created, setCreated] = useState<{ id: string; share_token: string; title: string; group_price: number; threshold: number; pickup_at: string } | null>(null);
 
   const lat = profile?.lat ?? null;
   const lng = profile?.lng ?? null;
 
   // ---- Commerçants à proximité (repli : tous les actifs)
+  // Chargement borné (20 s via ./net) et jamais bloquant : en cas d'échec on
+  // affiche un message clair + « Réessayer » au lieu de laisser l'indicateur
+  // tourner indéfiniment sans explication.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      if (lat != null && lng != null) {
-        const { data } = await supabase.rpc("nearby_merchants", {
-          p_lat: lat, p_lng: lng, p_radius_m: 5000, p_limit: 50,
-        });
-        if (data && (data as unknown[]).length > 0) {
-          setMerchants(data as unknown as Merchant[]);
-          setLoadingMerchants(false);
-          return;
+      const res = await attemptLoad(async () => {
+        if (lat != null && lng != null) {
+          const { data, error } = await supabase.rpc("nearby_merchants", {
+            p_lat: lat, p_lng: lng, p_radius_m: 5000, p_limit: 50,
+          });
+          if (error) throw error;
+          if (data && (data as unknown[]).length > 0) return data as unknown as Merchant[];
         }
+        const { data, error } = await supabase
+          .from("merchants")
+          .select("*")
+          .eq("status", "active")
+          .order("name");
+        if (error) throw error;
+        return (data as Merchant[]) ?? [];
+      }, "Impossible de charger les commerçants. Vérifiez votre connexion puis réessayez.");
+      if (cancelled) return;
+      if (res.ok) {
+        setMerchants(res.data);
+        setMerchantsError(null);
+      } else {
+        setMerchantsError(res.error);
       }
-      const { data } = await supabase
-        .from("merchants")
-        .select("*")
-        .eq("status", "active")
-        .order("name");
-      setMerchants((data as Merchant[]) ?? []);
       setLoadingMerchants(false);
+      setReloadingMerchants(false);
     })();
-  }, [lat, lng]);
+    return () => {
+      cancelled = true;
+    };
+  }, [lat, lng, merchantsAttempt]);
 
   // ---- Offres du commerçant sélectionné
   useEffect(() => {
     if (!merchantId) {
       setOffers([]);
       setOfferId(null);
+      setOffersError(null);
       return;
     }
+    let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("offers")
-        .select("*")
-        .eq("merchant_id", merchantId)
-        .eq("active", true)
-        .order("group_price");
-      setOffers((data as Offer[]) ?? []);
+      const res = await attemptLoad(async () => {
+        const { data, error } = await supabase
+          .from("offers")
+          .select("*")
+          .eq("merchant_id", merchantId)
+          .eq("active", true)
+          .order("group_price");
+        if (error) throw error;
+        return (data as Offer[]) ?? [];
+      }, "Impossible de charger les offres de ce commerçant. Vérifiez votre connexion puis réessayez.");
+      if (cancelled) return;
+      if (!res.ok) {
+        setOffersError(res.error);
+        setReloadingOffers(false);
+        return;
+      }
+      setOffersError(null);
+      setOffers(res.data);
       // Offre présélectionnée via le deep link merchant/… → new-order
-      if (params.offerId && (data as Offer[])?.some((o) => o.id === params.offerId)) {
+      if (params.offerId && res.data.some((o) => o.id === params.offerId)) {
         setOfferId(params.offerId!);
       } else {
-        setOfferId((prev) => (prev && (data as Offer[])?.some((o) => o.id === prev) ? prev : null));
+        setOfferId((prev) => (prev && res.data.some((o) => o.id === prev) ? prev : null));
       }
+      setReloadingOffers(false);
     })();
-  }, [merchantId, params.offerId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId, params.offerId, offersAttempt]);
+
+  const retryMerchants = () => {
+    setReloadingMerchants(true);
+    setMerchantsAttempt((n) => n + 1);
+  };
+
+  const retryOffers = () => {
+    setReloadingOffers(true);
+    setOffersAttempt((n) => n + 1);
+  };
 
   // Deep link avec commerçant/offre : on avance directement aux étapes suivantes.
   useEffect(() => {
@@ -227,6 +277,8 @@ export default function NewOrderScreen() {
             <Text style={styles.stepQuestion}>Chez quel commerçant ?</Text>
             {loadingMerchants ? (
               <ActivityIndicator color={colors.brand} style={{ marginVertical: spacing.md }} />
+            ) : merchantsError ? (
+              <LoadError message={merchantsError} onRetry={retryMerchants} retrying={reloadingMerchants} />
             ) : merchants.length === 0 ? (
               <Text style={styles.muted}>Aucun commerçant partenaire actif pour l'instant.</Text>
             ) : (
@@ -248,7 +300,9 @@ export default function NewOrderScreen() {
         ) : step === 2 ? (
           <View>
             <Text style={styles.stepQuestion}>Quelle offre choisir ?</Text>
-            {offers.length === 0 ? (
+            {offersError ? (
+              <LoadError message={offersError} onRetry={retryOffers} retrying={reloadingOffers} />
+            ) : offers.length === 0 ? (
               <Text style={styles.muted}>Ce commerçant n'a pas d'offre active.</Text>
             ) : (
               offers.map((o) => (

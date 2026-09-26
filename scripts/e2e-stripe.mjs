@@ -34,6 +34,13 @@
 //      les erreurs GoTrue deviennent des messages français sans jargon, et les
 //      écrans d'auth (connexion, inscription, code + renvoi) gardent leur
 //      try/catch/finally.
+//   K. Listes : même invariant pour les chargements d'écran (commerçants,
+//      offres, commandes, notifications, fiches). Le chargeur partagé de l'app
+//      (mobile/src/lib/load.ts, importé tel quel) rend toujours un résultat :
+//      un serveur muet est abandonné au délai, un échec donne un message
+//      français + un bouton « Réessayer », jamais un chargement infini ni un
+//      « aucun résultat » mensonger. Garde-fous sur les écrans et sur
+//      mobile/src/lib/auth.tsx (statut toujours résolu).
 //
 // Usage :
 //   1. supabase start && supabase db reset
@@ -1081,9 +1088,201 @@ async function scenarioJ() {
 }
 
 // ============================================================================
+// K. Listes : échec visible + « Réessayer », jamais un chargement infini
+// ----------------------------------------------------------------------------
+// L'angle mort : un `await` qui rejette dans une IIFE de chargement (IIFE de
+// useEffect, useCallback de liste) n'était géré nulle part, donc
+// `setLoading(false)` ne s'exécutait jamais : indicateur infini, muet, sans
+// aucun moyen de réessayer (new-order.tsx et sept autres écrans). Deux volets :
+//   1. comportement réel du chargeur partagé de l'app (mobile/src/lib/load.ts
+//      importé tel quel) : une tâche qui rejette rend TOUJOURS un résultat
+//      exploitable, un réseau muet est abandonné au délai, et aucun texte
+//      anglais de PostgREST n'atteint l'écran ;
+//   2. garde-fous : les écrans doivent garder le finally, l'état d'échec et le
+//      bouton « Réessayer », et les mensonges d'avant ne doivent pas revenir.
+// ============================================================================
+async function scenarioK() {
+  console.log("\n=== K. Listes : échec explicite + « Réessayer », jamais de chargement infini ===");
+  const loader = await import(repoFile("mobile/src/lib/load.ts").href);
+  const net = await import(repoFile("mobile/src/lib/net.ts").href);
+  const FB = "Impossible de charger vos commandes. Vérifiez votre connexion puis réessayez.";
+  // Jargon technique (anglais, codes, noms d'API) qui ne doit jamais s'afficher.
+  const JARGON = /error|fetch|failed|failure|invalid|token|jwt|undefined|null|unauthorized|status|supabase|postgrest|relation/i;
+
+  // 1. Une tâche qui rejette ne fait jamais lever le chargeur : il rend un
+  //    résultat, donc l'écran peut toujours arrêter son chargement.
+  let threw = false;
+  let res = null;
+  try {
+    res = await loader.attemptLoad(() => Promise.reject(new Error("boom")), FB);
+  } catch {
+    threw = true;
+  }
+  check(
+    "tâche qui rejette → aucun rejet propagé (le chargement peut s'arrêter)",
+    !threw && res?.ok === false && typeof res.error === "string" && res.error.length > 0,
+    threw ? "attemptLoad a levé" : `ok=${res?.ok} — « ${res?.error} »`,
+  );
+
+  // 2. Réseau muet (le paquet part, rien ne revient) : borné par le délai de
+  //    l'app, avec un message humain — c'est exactement le cas qui laissait
+  //    l'indicateur tourner indéfiniment.
+  const mute = createServer(() => {
+    /* volontairement muet : la socket reste ouverte, aucune réponse */
+  });
+  await new Promise((resolve) => mute.listen(0, "127.0.0.1", resolve));
+  const mutePort = mute.address().port;
+  const started = Date.now();
+  const muteRes = await loader.attemptLoad(
+    () => net.fetchWithTimeout(`http://127.0.0.1:${mutePort}/muet`, {}, 1200),
+    FB,
+  );
+  const elapsed = Date.now() - started;
+  mute.close();
+  check(
+    "serveur muet → échec borné, pas d'attente infinie",
+    muteRes.ok === false && elapsed >= 1100 && elapsed <= 3500,
+    `${elapsed} ms — « ${muteRes.error} »`,
+  );
+  check(
+    "serveur muet → message humain sans jargon",
+    /répond pas/i.test(muteRes.error) && !JARGON.test(muteRes.error),
+    muteRes.error,
+  );
+
+  // 3. Erreur PostgREST réelle : jamais affichée telle quelle (elle est en
+  //    anglais et truffée de noms de tables).
+  const postgrest = loader.humanLoadError(
+    { message: 'PostgrestError: relation "group_orders" does not exist' },
+    FB,
+  );
+  check(
+    "erreur PostgREST → message contextuel français (texte brut jamais affiché)",
+    postgrest === FB && !JARGON.test(postgrest),
+    `« ${postgrest} »`,
+  );
+
+  // 4. Machine d'état d'un écran de liste : échec → chargement arrêté + échec
+  //    visible ; puis « Réessayer » → même chemin, données affichées.
+  const state = { loading: true, error: null, data: [] };
+  const firstTry = await loader.attemptLoad(
+    () => Promise.reject(new Error("TypeError: Failed to fetch")),
+    FB,
+  );
+  try {
+    if (firstTry.ok) state.data = firstTry.data;
+    else state.error = firstTry.error;
+  } finally {
+    // Ce que chaque écran exécute désormais dans son finally.
+    state.loading = false;
+  }
+  check(
+    "après échec : chargement arrêté et échec explicite à l'écran",
+    state.loading === false && state.error !== null && state.data.length === 0,
+    `loading=${state.loading} — « ${state.error} »`,
+  );
+
+  const retryTry = await loader.attemptLoad(() => Promise.resolve([{ id: "o1" }]), FB);
+  try {
+    if (retryTry.ok) {
+      state.data = retryTry.data;
+      state.error = null;
+    } else {
+      state.error = retryTry.error;
+    }
+  } finally {
+    state.loading = false;
+  }
+  check(
+    "« Réessayer » relance l'appel et efface l'échec",
+    retryTry.ok === true && state.loading === false && state.error === null && state.data.length === 1,
+    "même chargeur, deuxième tentative réussie",
+  );
+
+  // 5. Garde-fous de convention : l'UI d'échec et le chargeur partagés, puis
+  //    chaque écran de liste.
+  const read = (rel) => readFileSync(repoFile(rel), "utf8");
+  const ui = read("mobile/src/components/ui.tsx");
+  check(
+    "composant partagé d'échec de chargement avec bouton « Réessayer »",
+    /export function LoadError/.test(ui) && ui.includes("Réessayer") && ui.includes("onRetry"),
+    "mobile/src/components/ui.tsx",
+  );
+  check(
+    "chargeur partagé sans exception (attemptLoad) disponible pour tous les écrans",
+    /export async function attemptLoad/.test(read("mobile/src/lib/load.ts")),
+    "mobile/src/lib/load.ts",
+  );
+
+  const listScreens = [
+    "mobile/src/app/(tabs)/index.tsx",
+    "mobile/src/app/(tabs)/orders.tsx",
+    "mobile/src/app/(tabs)/notifications.tsx",
+    "mobile/src/app/new-order.tsx",
+    "mobile/src/app/merchant/[id].tsx",
+    "mobile/src/app/order/[id].tsx",
+  ];
+  const noGuard = listScreens.filter((f) => {
+    const src = read(f);
+    return !src.includes("attemptLoad(") || !src.includes("LoadError") || !/\}\s*finally\s*\{/.test(src);
+  });
+  check(
+    "écrans de liste : chargeur non bloquant + état d'échec + finally",
+    noGuard.length === 0,
+    noGuard.length ? `manquant dans ${noGuard.join(", ")}` : `${listScreens.length} écrans couverts`,
+  );
+
+  // new-order porte DEUX listes (commerçants, puis offres) : chacune doit avoir
+  // son propre état d'échec, sinon l'offre « aucune offre active » ment.
+  const newOrder = read("mobile/src/app/new-order.tsx");
+  check(
+    "new-order : les deux listes (commerçants, offres) ont leur propre échec",
+    (newOrder.match(/attemptLoad\(/g) ?? []).length >= 2 &&
+      newOrder.includes("merchantsError") &&
+      newOrder.includes("offersError") &&
+      (newOrder.match(/<LoadError/g) ?? []).length >= 2,
+    "commerçants (nearby_merchants / merchants) + offres (offers)",
+  );
+
+  // Les mensonges d'avant ne doivent pas revenir : un échec silencieux affiché
+  // comme un résultat vide, ou un texte d'erreur brut affiché tel quel.
+  const forbidden = [
+    ["mobile/src/app/(tabs)/orders.tsx", 'console.warn("orders load"'],
+    ["mobile/src/app/(tabs)/index.tsx", "ordersRes.error.message"],
+    ["mobile/src/app/merchant/[id].tsx", "merchantRes.error?.message"],
+    ["mobile/src/app/(tabs)/profile.tsx", "setHasCard(false)"],
+    ["mobile/src/lib/auth.tsx", "supabase.auth.getSession().then("],
+  ];
+  const back = forbidden.filter(([f, s]) => read(f).includes(s));
+  check(
+    "les chemins silencieux/menteurs de la vague précédente ne reviennent pas",
+    back.length === 0,
+    back.length ? `réapparu dans ${back.map(([f]) => f).join(", ")}` : "orders, index, merchant, profile, auth",
+  );
+
+  // Le statut d'authentification ne peut plus rester « loading » (sinon l'app
+  // entière restait sur un indicateur, sans même un écran de connexion).
+  const auth = read("mobile/src/lib/auth.tsx");
+  check(
+    "statut d'authentification toujours résolu (finally + setStatus ready)",
+    /\}\s*finally\s*\{/.test(auth) && auth.includes('setStatus("ready")'),
+    "mobile/src/lib/auth.tsx",
+  );
+
+  // Écran Paiement : la vérification de carte a déjà un état d'erreur, il lui
+  // manquait un vrai bouton — il ne doit pas disparaître.
+  const payments = read("mobile/src/app/payments.tsx");
+  check(
+    "écran Paiement : échec de vérification → bouton de réessai",
+    payments.includes("LoadError") && payments.includes("onRetry={retry}"),
+    "mobile/src/app/payments.tsx",
+  );
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ, scenarioK];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;

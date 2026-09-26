@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Badge, EmptyState, ScreenHeader, type BadgeTone } from "../../components/ui";
+import { Badge, EmptyState, LoadError, ScreenHeader, type BadgeTone } from "../../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../../theme";
 import { supabase } from "../../lib/supabase";
+import { attemptLoad } from "../../lib/load";
 import { useAuth } from "../../lib/auth";
 import type { AppNotification } from "../../types";
 
@@ -25,28 +26,67 @@ export default function NotificationsScreen() {
 
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const load = useCallback(async () => {
-    if (!uid) return;
-    const { data, error } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", uid)
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (!error) setItems((data as AppNotification[]) ?? []);
-    setLoading(false);
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
+    const uidVal = uid;
+    // attemptLoad ne lève jamais : plus de chargement infini ni d'
+    // « Aucune notification » mensonger quand la requête échoue.
+    const res = await attemptLoad(async () => {
+      const { data, error: err } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", uidVal)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (err) throw err;
+      return (data as AppNotification[]) ?? [];
+    }, "Impossible de charger vos notifications. Vérifiez votre connexion puis réessayez.");
+    try {
+      if (res.ok) {
+        setItems(res.data);
+        setError(null);
+      } else {
+        setError(res.error);
+      }
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'échec inattendu :
+      // l'écran affiche alors l'échec et propose « Réessayer ».
+      setLoading(false);
+      setRetrying(false);
+    }
   }, [uid]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Marque tout comme lu dès l'ouverture de l'écran.
+  const retry = useCallback(() => {
+    setRetrying(true);
+    load();
+  }, [load]);
+
+  // Marque tout comme lu dès l'ouverture de l'écran. Un échec ici reste
+  // silencieux : au pire les notifications seront re-marquées au prochain
+  // affichage — il ne doit jamais casser l'écran de liste ni créer de
+  // promesse non gérée.
   useEffect(() => {
     const unread = items.filter((n) => !n.read).map((n) => n.id);
     if (unread.length > 0) {
-      supabase.rpc("set_notifications_read", { p_ids: unread }).then(() => load());
+      (async () => {
+        try {
+          await supabase.rpc("set_notifications_read", { p_ids: unread });
+          await load();
+        } catch {
+          // Silencieux : au pire les notifications seront re-marquées au
+          // prochain affichage. Jamais de promesse non gérée.
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length > 0]);
@@ -83,7 +123,9 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.root}>
       <ScreenHeader title="Notifications" subtitle="Tout ce qui se passe sur vos commandes" />
-      {loading ? (
+      {error ? (
+        <LoadError message={error} onRetry={retry} retrying={retrying} />
+      ) : loading ? (
         <ActivityIndicator size="large" color={colors.brand} style={{ marginTop: 60 }} />
       ) : items.length === 0 ? (
         <EmptyState

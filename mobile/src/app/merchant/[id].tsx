@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Button, Card, ScreenHeader } from "../../components/ui";
+import { Button, Card, LoadError, ScreenHeader } from "../../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, shadow, spacing, touch } from "../../theme";
 import { supabase } from "../../lib/supabase";
+import { attemptLoad } from "../../lib/load";
 import { formatDistance, formatPrice } from "../../lib/format";
 import { MERCHANT_CATEGORY_LABELS } from "../../types";
 import type { Merchant, Offer, UserRow } from "../../types";
@@ -17,30 +18,57 @@ export default function MerchantScreen() {
   const [distance, setDistance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const load = useCallback(async () => {
-    const [merchantRes, offersRes, profileRes] = await Promise.all([
-      supabase.from("merchants").select("*").eq("id", id!).maybeSingle(),
-      supabase.from("offers").select("*").eq("merchant_id", id!).eq("active", true).order("group_price"),
-      supabase.from("users").select("lat, lng").maybeSingle(),
-    ]);
+    // attemptLoad ne lève jamais (délai borné à 20 s via ./net) : on obtient
+    // toujours soit la fiche, soit un message en langage humain — jamais un
+    // chargement qui tourne sans fin.
+    const res = await attemptLoad(async () => {
+      const [merchantRes, offersRes, profileRes] = await Promise.all([
+        supabase.from("merchants").select("*").eq("id", id!).maybeSingle(),
+        supabase.from("offers").select("*").eq("merchant_id", id!).eq("active", true).order("group_price"),
+        supabase.from("users").select("lat, lng").maybeSingle(),
+      ]);
+      if (merchantRes.error) throw merchantRes.error;
+      if (offersRes.error) throw offersRes.error;
+      return {
+        merchant: (merchantRes.data as unknown as Merchant | null) ?? null,
+        offers: (offersRes.data as Offer[]) ?? [],
+        profile: (profileRes.data as Pick<UserRow, "lat" | "lng"> | null) ?? null,
+      };
+    }, "Impossible de charger cette fiche commerçant. Vérifiez votre connexion puis réessayez.");
 
-    if (merchantRes.error || !merchantRes.data) {
-      setError(merchantRes.error?.message ?? "Commerçant introuvable.");
+    try {
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      const { merchant: m, offers: loadedOffers, profile } = res.data;
+      if (!m) {
+        setError("Ce commerçant n'existe plus ou n'est plus disponible.");
+        return;
+      }
+      setMerchant(m);
+      setOffers(loadedOffers);
+      if (profile?.lat != null && profile.lng != null && m.lat != null && m.lng != null) {
+        setDistance(haversine(profile.lat, profile.lng, m.lat, m.lng));
+      }
+      setError(null);
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'échec : l'écran affiche
+      // alors l'erreur et propose « Réessayer ».
       setLoading(false);
-      return;
+      setRetrying(false);
     }
-    setMerchant(merchantRes.data as unknown as Merchant);
-    setOffers((offersRes.data as Offer[]) ?? []);
-
-    const profile = profileRes.data as Pick<UserRow, "lat" | "lng"> | null;
-    if (profile?.lat != null && profile.lng != null && merchantRes.data.lat != null && merchantRes.data.lng != null) {
-      setDistance(haversine(profile.lat, profile.lng, merchantRes.data.lat, merchantRes.data.lng));
-    }
-    setLoading(false);
   }, [id]);
 
   useEffect(() => {
+    load();
+  }, [load]);
+
+  const retry = useCallback(() => {
+    setRetrying(true);
     load();
   }, [load]);
 
@@ -55,7 +83,11 @@ export default function MerchantScreen() {
   if (!merchant) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.error}>{error ?? "Commerçant introuvable."}</Text>
+        <LoadError
+          message={error ?? "Ce commerçant n'existe plus ou n'est plus disponible."}
+          onRetry={retry}
+          retrying={retrying}
+        />
         <Button title="Retour" variant="outline" onPress={() => router.back()} style={{ marginTop: spacing.md }} />
       </View>
     );

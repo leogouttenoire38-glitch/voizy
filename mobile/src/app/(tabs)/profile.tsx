@@ -1,28 +1,54 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Button, Card, Row, Screen, ScreenHeader } from "../../components/ui";
 import { colors, fonts, fontSizes, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import { setupPaymentStatus } from "../../lib/api";
+import { attemptLoad } from "../../lib/load";
+
+type CardState = "loading" | "yes" | "no" | "unknown";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { profile } = useAuth();
-  const [hasCard, setHasCard] = useState<boolean | null>(null);
+  const [cardState, setCardState] = useState<CardState>("loading");
+  const [signingOut, setSigningOut] = useState(false);
 
-  useEffect(() => {
-    setupPaymentStatus()
-      .then((res) => {
-        if (res.ok) setHasCard(Boolean(res.has_payment_method));
-      })
-      .catch(() => setHasCard(false));
-  }, []);
+  // Vérifié à chaque affichage de l'onglet : au retour de l'écran Paiement (qui
+  // porte le bouton « Réessayer » de cette vérification), l'état est à jour.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        // attemptLoad ne lève jamais : en cas d'échec on affiche un état honnête
+        // (« vérification impossible ») au lieu de mentir avec « Aucune carte ».
+        const res = await attemptLoad(async () => {
+          const status = await setupPaymentStatus();
+          if (!status.ok) throw new Error(status.error || "statut carte indisponible");
+          return Boolean(status.has_payment_method);
+        }, "Vérification impossible — ouvrez la carte pour réessayer.");
+        if (cancelled) return;
+        setCardState(res.ok ? (res.data ? "yes" : "no") : "unknown");
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    router.replace("/sign-in");
+    setSigningOut(true);
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Même sans réseau, on ne laisse pas l'utilisateur coincé : il revient à
+      // l'écran de connexion, qui affichera un vrai message d'erreur si besoin.
+    } finally {
+      setSigningOut(false);
+      router.replace("/sign-in");
+    }
   };
 
   if (!profile) {
@@ -61,7 +87,15 @@ export default function ProfileScreen() {
       />
       <MenuItem
         label="Carte de paiement"
-        hint={hasCard === null ? "…" : hasCard ? "Carte enregistrée" : "Aucune carte"}
+        hint={
+          cardState === "loading"
+            ? "Vérification…"
+            : cardState === "yes"
+              ? "Carte enregistrée"
+              : cardState === "no"
+                ? "Aucune carte"
+                : "Vérification impossible — ouvrez la carte pour réessayer"
+        }
         onPress={() => router.push("/payments")}
       />
       <MenuItem
@@ -71,7 +105,7 @@ export default function ProfileScreen() {
       />
 
       <View style={{ height: spacing.lg }} />
-      <Button title="Se déconnecter" variant="danger" onPress={signOut} />
+      <Button title="Se déconnecter" variant="danger" onPress={signOut} loading={signingOut} />
       <Text style={styles.version}>Voizy · v0.1.0</Text>
     </Screen>
   );

@@ -9,11 +9,12 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Button, EmptyState, ScreenHeader } from "../../components/ui";
+import { Button, EmptyState, LoadError, ScreenHeader } from "../../components/ui";
 import { OrderCard } from "../../components/OrderCard";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
+import { attemptLoad } from "../../lib/load";
 import { formatDistance } from "../../lib/format";
 import { MERCHANT_CATEGORY_LABELS } from "../../types";
 import type { FeedOrder, NearbyMerchant } from "../../types";
@@ -36,28 +37,41 @@ export default function DiscoverScreen() {
     if (lat == null || lng == null) {
       setLoading(false);
       setHasLocation(false);
+      setError(null);
       return;
     }
+    const latVal = lat;
+    const lngVal = lng;
     setHasLocation(true);
-    setError(null);
-
-    const [ordersRes, merchantsRes] = await Promise.all([
-      supabase.rpc("open_orders_feed", { p_lat: lat, p_lng: lng, p_radius_m: 5000, p_limit: 50 }),
-      supabase.rpc("nearby_merchants", { p_lat: lat, p_lng: lng, p_radius_m: 5000, p_limit: 50 }),
-    ]);
-
-    if (ordersRes.error) {
-      setError(ordersRes.error.message);
-    } else {
-      setOrders((ordersRes.data as unknown as FeedOrder[]) ?? []);
+    // attemptLoad ne lève jamais (délai de 20 s borné via ./net) : le chargement
+    // s'arrête toujours, et l'échec devient visible + réessayable au lieu de
+    // laisser tourner l'indicateur en silence.
+    const res = await attemptLoad(async () => {
+      const [ordersRes, merchantsRes] = await Promise.all([
+        supabase.rpc("open_orders_feed", { p_lat: latVal, p_lng: lngVal, p_radius_m: 5000, p_limit: 50 }),
+        supabase.rpc("nearby_merchants", { p_lat: latVal, p_lng: lngVal, p_radius_m: 5000, p_limit: 50 }),
+      ]);
+      if (ordersRes.error) throw ordersRes.error;
+      if (merchantsRes.error) throw merchantsRes.error;
+      return {
+        orders: (ordersRes.data as unknown as FeedOrder[]) ?? [],
+        merchants: (merchantsRes.data as unknown as NearbyMerchant[]) ?? [],
+      };
+    }, "Impossible de charger les commandes et les commerçants du quartier. Vérifiez votre connexion puis réessayez.");
+    try {
+      if (res.ok) {
+        setOrders(res.data.orders);
+        setMerchants(res.data.merchants);
+        setError(null);
+      } else {
+        setError(res.error);
+      }
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'échec inattendu :
+      // l'écran affiche alors l'échec et propose « Réessayer ».
+      setLoading(false);
+      setRefreshing(false);
     }
-    if (merchantsRes.error) {
-      setError(merchantsRes.error.message);
-    } else {
-      setMerchants((merchantsRes.data as unknown as NearbyMerchant[]) ?? []);
-    }
-    setLoading(false);
-    setRefreshing(false);
   }, [lat, lng]);
 
   useFocusEffect(
@@ -66,10 +80,12 @@ export default function DiscoverScreen() {
     }, [load]),
   );
 
-  const onRefresh = () => {
+  // « Réessayer » et tirer-pour-rafraîchir passent par le même chemin : l'état
+  // d'échec ne disparaît qu'une fois les données réellement rechargées.
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     load();
-  };
+  }, [load]);
 
   const openOrders = orders.filter((o) => o.status === "open");
 
@@ -86,9 +102,7 @@ export default function DiscoverScreen() {
       />
 
       {error ? (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
+        <LoadError message={error} onRetry={onRefresh} retrying={refreshing} />
       ) : loading ? (
         <ActivityIndicator size="large" color={colors.brand} style={{ marginTop: 60 }} />
       ) : !hasLocation ? (
@@ -200,8 +214,6 @@ const styles = StyleSheet.create({
   createBtnText: { fontSize: fontSizes.body, fontWeight: "700", color: colors.onBrand, fontFamily: fonts.bold },
   listContent: { paddingBottom: 90 },
   noLocation: { gap: spacing.md },
-  errorBox: { padding: spacing.md, alignItems: "center" },
-  errorText: { color: colors.danger, textAlign: "center", fontFamily: fonts.medium },
   sectionTitleRow: {
     flexDirection: "row",
     justifyContent: "space-between",

@@ -16,8 +16,10 @@ function TabIcon({ glyph, active }: { glyph: string; active: boolean }) {
 export default function TabsLayout() {
   const { status, session, profile } = useAuth();
 
+  // Enregistrement push « au mieux » : la promesse est toujours gérée (jamais
+  // de rejet non capté) et jamais un écran ne dépend de son résultat.
   useEffect(() => {
-    if (session?.user.id) registerPushToken(session.user.id);
+    if (session?.user.id) void registerPushToken(session.user.id).catch(() => {});
   }, [session?.user.id]);
 
   if (status === "loading") {

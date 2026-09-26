@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import { Button, Card, Screen, ScreenHeader } from "../components/ui";
+import { Button, Card, LoadError, Screen, ScreenHeader } from "../components/ui";
 import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme";
 import { setupPaymentStatus } from "../lib/api";
 import { startCardSetup } from "../lib/checkout";
@@ -12,6 +12,7 @@ export default function PaymentsScreen() {
   const [status, setStatus] = useState<"loading" | "has_card" | "no_card" | "error">("loading");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [reloading, setReloading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -19,8 +20,16 @@ export default function PaymentsScreen() {
       setStatus(res.ok ? (res.has_payment_method ? "has_card" : "no_card") : "error");
     } catch {
       setStatus("error");
+    } finally {
+      // Toujours arrêter le chargement, même en cas d'erreur inattendue.
+      setReloading(false);
     }
   }, []);
+
+  const retry = useCallback(() => {
+    setReloading(true);
+    load();
+  }, [load]);
 
   // Recharge à chaque affichage : au retour de Stripe (deep link voizy://payments)
   // l'écran montre l'état réel de la carte au lieu de rester sur « Aucune carte ».
@@ -71,7 +80,11 @@ export default function PaymentsScreen() {
             Aucune carte enregistrée. Vous en aurez besoin pour participer à une commande groupée.
           </Text>
         ) : (
-          <Text style={styles.hint}>Impossible de vérifier votre carte. Réessayez.</Text>
+          <LoadError
+            message="Impossible de vérifier votre carte. Vérifiez votre connexion puis réessayez."
+            onRetry={retry}
+            retrying={reloading}
+          />
         )}
 
         {status !== "loading" ? (

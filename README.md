@@ -164,7 +164,7 @@ interroge l'état réel chez Stripe (`setup-payment` en GET,
 retour au premier plan, délai maximum) et `startCardSetup()` ne lève jamais —
 l'écran appelant arrête donc toujours son chargement.
 
-### Réseau : jamais de bouton bloqué en silence
+### Réseau : jamais de bouton bloqué en silence, jamais de liste bloquée muette
 
 `mobile/src/lib/net.ts` borne **toutes** les requêtes dans le temps (20 s) : le
 client Supabase l'utilise comme `fetch` global (donc l'authentification aussi,
@@ -174,6 +174,16 @@ handler qui passe un bouton en chargement (`setBusy`/`setPublishing`) est
 entouré d'un `try/catch/finally` qui remet le bouton au repos, et les erreurs
 sont traduites par `lib/errors.ts` — un message non reconnu devient le message
 contextuel de l'écran, jamais le texte technique anglais de GoTrue/PostgREST.
+
+Même invariant pour les **chargements d'écran** (listes, fiches, statuts) : ils
+passent tous par `mobile/src/lib/load.ts` (`attemptLoad`), qui ne lève jamais et
+rend soit les données, soit un message humain (`humanLoadError`). Chaque écran
+remet son état de chargement à `false` dans un `finally`, et un échec affiche le
+composant partagé `LoadError` — « Échec du chargement » + bouton **« Réessayer »**
+qui relance l'appel. Un échec ne doit jamais être présenté comme un résultat
+vide (« Aucune commande », « Aucune carte »), ni laisser un indicateur tourner
+sans fin. Le statut d'authentification (`lib/auth.tsx`) suit la même règle : il
+tombe toujours à `ready`, même si la session ne peut pas être lue.
 
 
 ## Modèle économique (qui paie quoi)
@@ -267,16 +277,20 @@ récurser), **parcours de paiement carte absente → enregistrement → reprise*
 (scénario H : aucune participation fantôme), **enregistrement de carte**
 (scénario I : les URL de retour de l'app sont acceptées puis conservées par
 Stripe, une URL sans hôte est refusée, et `setup-payment` reflète l'état réel
-« carte enregistrée ») et **auth sans blocage silencieux** (scénario J : un
-serveur muet est abandonné au délai par le module `net.ts` réellement importé,
-les erreurs GoTrue deviennent des messages français sans jargon, et les écrans
-à bouton gardent leur `try/catch/finally`).
+« carte enregistrée »), **auth sans blocage silencieux** (scénario J : un serveur
+muet est abandonné au délai par le module `net.ts` réellement importé, les
+erreurs GoTrue deviennent des messages français sans jargon, et les écrans à
+bouton gardent leur `try/catch/finally`) et **listes sans chargement infini ni
+mensonge** (scénario K : `lib/load.ts` réellement importé — une tâche qui
+rejette rend un échec exploitable, un serveur muet est abandonné au délai, un
+échec montre « Échec du chargement » + « Réessayer », et les chemins silencieux
+de la vague précédente ne peuvent pas revenir).
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 64 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 77 ✅ / 0 ❌ »
 ```
 
 Notes importantes :

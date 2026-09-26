@@ -6,6 +6,7 @@ import { colors, fonts, fontSizes, lineHeights, radius, spacing } from "../theme
 import { useAuth } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 import { geocodeAddress } from "../lib/api";
+import { humanLoadError } from "../lib/load";
 import { getLastKnown, requestPermission } from "../lib/geo";
 
 export default function OnboardingScreen() {
@@ -39,7 +40,13 @@ export default function OnboardingScreen() {
       }
       await saveZone(pos.coords.latitude, pos.coords.longitude, "Autour de moi");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Impossible de définir votre quartier.");
+      // Jamais de message brut de PostgREST (anglais) à l'écran.
+      setError(
+        humanLoadError(
+          err,
+          "Impossible de définir votre quartier. Vérifiez votre connexion puis réessayez.",
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -56,7 +63,7 @@ export default function OnboardingScreen() {
       const geo = await geocodeAddress(address.trim());
       await saveZone(geo.lat, geo.lng, geo.label);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Adresse introuvable.");
+      setError(humanLoadError(err, "Adresse introuvable. Vérifiez le libellé puis réessayez."));
     } finally {
       setBusy(null);
     }

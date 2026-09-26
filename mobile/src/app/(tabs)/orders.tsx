@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { EmptyState, ScreenHeader } from "../../components/ui";
+import { EmptyState, LoadError, ScreenHeader } from "../../components/ui";
 import { MyOrderCard } from "../../components/MyOrderCard";
 import { colors, fonts, fontSizes, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
+import { attemptLoad } from "../../lib/load";
 import type { GroupOrder, Participation } from "../../types";
 
 interface OrderWithMerchant extends GroupOrder {
@@ -20,33 +21,52 @@ export default function OrdersScreen() {
   const [orders, setOrders] = useState<OrderWithMerchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!uid) return;
-    const { data: myParts } = await supabase
-      .from("participations")
-      .select("group_order_id")
-      .eq("user_id", uid);
-
-    const joinedIds = ((myParts ?? []) as Participation[]).map((p) => p.group_order_id);
-
-    const { data, error } = await supabase
-      .from("group_orders")
-      .select("*, merchants(name)")
-      .or(
-        joinedIds.length > 0
-          ? `organizer_id.eq.${uid},id.in.(${joinedIds.join(",")})`
-          : `organizer_id.eq.${uid}`,
-      )
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.warn("orders load", error.message);
-    } else {
-      setOrders((data as unknown as OrderWithMerchant[]) ?? []);
+    if (!uid) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
     }
-    setLoading(false);
-    setRefreshing(false);
+    const uidVal = uid;
+    // attemptLoad ne lève jamais : on n'avale plus l'erreur en silence (avant,
+    // un échec affichait « Aucune commande », un mensonge, sans moyen de
+    // réessayer). Ici l'échec devient visible et réessayable.
+    const res = await attemptLoad(async () => {
+      const { data: myParts, error: partsErr } = await supabase
+        .from("participations")
+        .select("group_order_id")
+        .eq("user_id", uidVal);
+      if (partsErr) throw partsErr;
+
+      const joinedIds = ((myParts ?? []) as Participation[]).map((p) => p.group_order_id);
+
+      const { data, error: ordersErr } = await supabase
+        .from("group_orders")
+        .select("*, merchants(name)")
+        .or(
+          joinedIds.length > 0
+            ? `organizer_id.eq.${uidVal},id.in.(${joinedIds.join(",")})`
+            : `organizer_id.eq.${uidVal}`,
+        )
+        .order("created_at", { ascending: false });
+      if (ordersErr) throw ordersErr;
+      return (data as unknown as OrderWithMerchant[]) ?? [];
+    }, "Impossible de charger vos commandes. Vérifiez votre connexion puis réessayez.");
+    try {
+      if (res.ok) {
+        setOrders(res.data);
+        setError(null);
+      } else {
+        setError(res.error);
+      }
+    } finally {
+      // Toujours arrêter le chargement (et le rafraîchissement), même en cas
+      // d'échec inattendu : plus de spinner ni de « tirez pour rafraîchir » figés.
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [uid]);
 
   const onRefresh = useCallback(() => {
@@ -70,7 +90,9 @@ export default function OrdersScreen() {
         }
       />
 
-      {loading ? (
+      {error ? (
+        <LoadError message={error} onRetry={onRefresh} retrying={refreshing} />
+      ) : loading ? (
         <ActivityIndicator size="large" color={colors.brand} style={{ marginTop: 60 }} />
       ) : orders.length === 0 ? (
         <EmptyState

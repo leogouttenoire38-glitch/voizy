@@ -19,14 +19,21 @@ const AuthContext = createContext<AuthState>({
   refreshProfile: async () => {},
 });
 
+// Ne lève jamais : un profil indisponible (réseau muet, RLS, ligne absente)
+// rend null au lieu de rejeter — sinon la promesse n'était gérée nulle part et
+// les écrans qui attendent `profile` restaient sur un indicateur infini.
 async function fetchProfile(userId: string): Promise<UserRow | null> {
-  const { data, error } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", userId)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as UserRow;
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data as UserRow;
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -35,22 +42,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserRow | null>(null);
 
   const refreshProfile = async () => {
-    const { data } = await supabase.auth.getSession();
-    const uid = data.session?.user.id;
-    if (!uid) {
-      setProfile(null);
-      return;
+    try {
+      const { data } = await supabase.auth.getSession();
+      const uid = data.session?.user.id;
+      if (!uid) {
+        setProfile(null);
+        return;
+      }
+      setProfile(await fetchProfile(uid));
+    } catch {
+      // Réseau absent : on garde le dernier profil connu plutôt que de vider
+      // l'écran en silence. Le prochain affichage réessaiera.
     }
-    const p = await fetchProfile(uid);
-    setProfile(p);
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session) setProfile(await fetchProfile(data.session.user.id));
-      setStatus("ready");
-    });
+    let cancelled = false;
+
+    // Jamais de statut bloqué : même si la session ne peut pas être lue (réseau
+    // muet au démarrage), on passe à « ready » et l'écran de connexion prend le
+    // relais avec un vrai message d'erreur.
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (cancelled) return;
+        setSession(data.session);
+        if (data.session) setProfile(await fetchProfile(data.session.user.id));
+      } catch {
+        if (!cancelled) setSession(null);
+      } finally {
+        if (!cancelled) setStatus("ready");
+      }
+    })();
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       setSession(newSession);
@@ -67,7 +90,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setStatus("ready");
     });
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   return (

@@ -258,6 +258,36 @@ export function EmptyState({ icon, title, hint }: { icon?: string; title: string
 }
 
 // ---------------------------------------------------------------------------
+// Échec de chargement — jamais de spinner muet : message + « Réessayer »
+// ---------------------------------------------------------------------------
+export function LoadError({
+  message,
+  onRetry,
+  retrying,
+  title = "Échec du chargement",
+}: {
+  message: string;
+  onRetry: () => void;
+  retrying?: boolean;
+  title?: string;
+}) {
+  return (
+    <View style={styles.loadError} accessibilityLabel={`${title} : ${message}`}>
+      <Text style={styles.loadErrorIcon}>⚠️</Text>
+      <Text style={styles.loadErrorTitle}>{title}</Text>
+      <Text style={styles.loadErrorText}>{message}</Text>
+      <Button
+        title="Réessayer"
+        variant="secondary"
+        onPress={onRetry}
+        loading={retrying}
+        style={styles.loadErrorButton}
+      />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Écran sûr avec scroll (défaut)
 // ---------------------------------------------------------------------------
 export function Screen({
@@ -374,6 +404,20 @@ const styles = StyleSheet.create({
 
   badge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full, alignSelf: "flex-start" },
   badgeText: { fontSize: fontSizes.bodySmall, fontWeight: "700", fontFamily: fonts.bold },
+
+  loadError: {
+    alignItems: "center",
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    padding: spacing.md,
+    marginVertical: spacing.sm,
+  },
+  loadErrorIcon: { fontSize: 30, marginBottom: 4 },
+  loadErrorTitle: { fontSize: fontSizes.heading, fontWeight: "700", color: colors.ink, textAlign: "center", fontFamily: fonts.bold },
+  loadErrorText: { fontSize: fontSizes.body, color: colors.danger, textAlign: "center", marginTop: 6, lineHeight: lineHeights.body, fontFamily: fonts.medium },
+  loadErrorButton: { marginTop: spacing.md, alignSelf: "stretch" },
 
   empty: { alignItems: "center", paddingVertical: 48, paddingHorizontal: spacing.lg },
   emptyIcon: { fontSize: 44, marginBottom: spacing.sm },
