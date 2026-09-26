@@ -46,6 +46,11 @@ export default function OrderScreen() {
   const [participants, setParticipants] = useState<Participation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Un échec de chargement ne doit jamais devenir un résultat vide : sans ces
+  // deux états, l'organisateur lisait « Aucun participant en attente de
+  // retrait » alors que la commande existait (mensonge au moment du retrait).
+  const [participantsError, setParticipantsError] = useState<string | null>(null);
+  const [participationError, setParticipationError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   const [joining, setJoining] = useState(false);
@@ -85,32 +90,59 @@ export default function OrderScreen() {
         data = byToken.data;
       }
       if (!data) {
-        return { order: null, myParticipation: null as Participation | null, participants: [] as Participation[] };
+        return {
+          order: null,
+          myParticipation: null as Participation | null,
+          participationError: null as string | null,
+          participants: [] as Participation[],
+          participantsError: null as string | null,
+        };
       }
 
       // Ma participation + participants (pour la confirmation de retrait).
-      // Enrichissement tolérant : une erreur ici ne doit pas empêcher la
-      // commande de s'afficher.
+      // Chaque liste est chargée par son propre attemptLoad : un échec
+      // n'empêche pas la commande de s'afficher, mais il est CONSERVÉ (jamais
+      // transformé en liste vide ni en silence) pour que l'écran puisse le
+      // montrer et le réessayer.
       let myParticipation: Participation | null = null;
+      let participationError: string | null = null;
       let participants: Participation[] = [];
+      let participantsError: string | null = null;
       if (uidVal) {
-        const [partRes, partsRes] = await Promise.all([
-          supabase
-            .from("participations")
-            .select("*")
-            .eq("group_order_id", (data as { id: string }).id)
-            .eq("user_id", uidVal)
-            .maybeSingle(),
-          supabase
-            .from("participations")
-            .select("*")
-            .eq("group_order_id", (data as { id: string }).id)
-            .in("status", ["paid"]),
+        const targetId = (data as { id: string }).id;
+        const [partLoad, partsLoad] = await Promise.all([
+          attemptLoad(async () => {
+            const partRes = await supabase
+              .from("participations")
+              .select("*")
+              .eq("group_order_id", targetId)
+              .eq("user_id", uidVal)
+              .maybeSingle();
+            if (partRes.error) throw partRes.error;
+            return (partRes.data as Participation | null) ?? null;
+          }, "Impossible de vérifier votre participation. Vérifiez votre connexion puis réessayez."),
+          attemptLoad(async () => {
+            const partsRes = await supabase
+              .from("participations")
+              .select("*")
+              .eq("group_order_id", targetId)
+              .in("status", ["paid"]);
+            if (partsRes.error) throw partsRes.error;
+            return (partsRes.data as Participation[]) ?? [];
+          }, "Impossible de charger la liste des participants. Vérifiez votre connexion puis réessayez."),
         ]);
-        if (!partRes.error) myParticipation = (partRes.data as Participation | null) ?? null;
-        if (!partsRes.error) participants = (partsRes.data as Participation[]) ?? [];
+        if (partLoad.ok) myParticipation = partLoad.data;
+        else participationError = partLoad.error;
+        if (partsLoad.ok) participants = partsLoad.data;
+        else participantsError = partsLoad.error;
       }
-      return { order: data as unknown as OrderDetail, myParticipation, participants };
+      return {
+        order: data as unknown as OrderDetail,
+        myParticipation,
+        participationError,
+        participants,
+        participantsError,
+      };
     }, "Impossible de charger cette commande. Vérifiez votre connexion puis réessayez.");
 
     try {
@@ -125,7 +157,9 @@ export default function OrderScreen() {
       }
       setOrder(res.data.order);
       setMyParticipation(res.data.myParticipation);
+      setParticipationError(res.data.participationError);
       setParticipants(res.data.participants);
+      setParticipantsError(res.data.participantsError);
       setError(null);
     } finally {
       // Toujours arrêter le chargement (même en cas d'échec inattendu) :
@@ -288,7 +322,9 @@ export default function OrderScreen() {
   const isOrganizer = order.organizer_id === uid;
   const isParticipant = Boolean(myParticipation);
   const isOpen = order.status === "open";
-  const canJoin = isOpen && !isOrganizer && !isParticipant;
+  // Participation non vérifiée : on ne propose pas « Rejoindre » à l'aveugle
+  // (l'utilisateur participe peut-être déjà) — l'échec est montré plus bas.
+  const canJoin = isOpen && !isOrganizer && !isParticipant && !participationError;
   const merchant = order.merchants;
   const progressCurrent = Math.min(order.participants_current, order.threshold);
   const statusMeta = STATUS_META[order.status] ?? STATUS_META.open;
@@ -354,6 +390,17 @@ export default function OrderScreen() {
           </View>
         ) : null}
 
+        {/* Participation non vérifiée : dire pourquoi le bouton « Rejoindre »
+            n'est pas proposé, plutôt que de laisser un silence ambigu. */}
+        {participationError && !isOrganizer ? (
+          <LoadError
+            message={participationError}
+            onRetry={retry}
+            retrying={retrying}
+            title="Participation non vérifiée"
+          />
+        ) : null}
+
         {/* Action principale : ouvrir l'ÉTAPE DE PAIEMENT (jamais masquée). */}
         {canJoin ? (
           <View style={styles.actions}>
@@ -374,7 +421,14 @@ export default function OrderScreen() {
         {isOrganizer && order.status === "confirmed" ? (
           <View style={styles.actions}>
             <Text style={styles.sectionLabel}>Retrait — participants</Text>
-            {participants.length === 0 ? (
+            {participantsError ? (
+              <LoadError
+                message={participantsError}
+                onRetry={retry}
+                retrying={retrying}
+                title="Participants non chargés"
+              />
+            ) : participants.length === 0 ? (
               <Text style={styles.organizerLine}>Aucun participant en attente de retrait.</Text>
             ) : (
               <>
@@ -411,7 +465,12 @@ export default function OrderScreen() {
                 })}
               </>
             )}
-            <Button title="Confirmer le retrait" onPress={doConfirmPickup} loading={confirming} disabled={participants.length === 0} />
+            <Button
+              title="Confirmer le retrait"
+              onPress={doConfirmPickup}
+              loading={confirming}
+              disabled={participantsError !== null || participants.length === 0}
+            />
           </View>
         ) : null}
 

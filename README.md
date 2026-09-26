@@ -182,7 +182,10 @@ remet son état de chargement à `false` dans un `finally`, et un échec affiche
 composant partagé `LoadError` — « Échec du chargement » + bouton **« Réessayer »**
 qui relance l'appel. Un échec ne doit jamais être présenté comme un résultat
 vide (« Aucune commande », « Aucune carte »), ni laisser un indicateur tourner
-sans fin. Le statut d'authentification (`lib/auth.tsx`) suit la même règle : il
+sans fin. La règle vaut aussi pour les **sous-listes** d'un écran : les
+participants d'une commande (`order/[id].tsx`) sont chargés par leur propre
+`attemptLoad` et gardent leur propre état d'échec, sinon « Aucun participant en
+attente de retrait » mentait à l'organisateur au moment du retrait. Le statut d'authentification (`lib/auth.tsx`) suit la même règle : il
 tombe toujours à `ready`, même si la session ne peut pas être lue.
 
 
@@ -284,13 +287,16 @@ bouton gardent leur `try/catch/finally`) et **listes sans chargement infini ni
 mensonge** (scénario K : `lib/load.ts` réellement importé — une tâche qui
 rejette rend un échec exploitable, un serveur muet est abandonné au délai, un
 échec montre « Échec du chargement » + « Réessayer », et les chemins silencieux
-de la vague précédente ne peuvent pas revenir).
+de la vague précédente ne peuvent pas revenir). La sous-liste des participants
+d'une commande a la même garantie : un échec y est montré avec « Réessayer », il
+ne peut plus se déguiser en « Aucun participant en attente de retrait » alors que
+la commande existe — c'est l'organisateur qui décide des no-shows au retrait.
 
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 77 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 79 ✅ / 0 ❌ »
 ```
 
 Notes importantes :

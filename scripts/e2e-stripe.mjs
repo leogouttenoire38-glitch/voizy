@@ -1099,7 +1099,9 @@ async function scenarioJ() {
 //      exploitable, un réseau muet est abandonné au délai, et aucun texte
 //      anglais de PostgREST n'atteint l'écran ;
 //   2. garde-fous : les écrans doivent garder le finally, l'état d'échec et le
-//      bouton « Réessayer », et les mensonges d'avant ne doivent pas revenir.
+//      bouton « Réessayer », et les mensonges d'avant ne doivent pas revenir
+//      (dont la sous-liste « participants » de order/[id], qui se déguisait en
+//      « aucun participant » alors que la commande existait).
 // ============================================================================
 async function scenarioK() {
   console.log("\n=== K. Listes : échec explicite + « Réessayer », jamais de chargement infini ===");
@@ -1244,6 +1246,28 @@ async function scenarioK() {
     "commerçants (nearby_merchants / merchants) + offres (offers)",
   );
 
+  // order/[id] a une sous-liste propre (les participants du retrait) : son
+  // échec doit être MONTRÉ, jamais transformé en « aucun participant » — c'est
+  // l'organisateur qui coche les no-shows au moment du retrait.
+  const orderScreen = read("mobile/src/app/order/[id].tsx");
+  const orderGuardIdx = orderScreen.indexOf("participantsError ?");
+  const orderEmptyIdx = orderScreen.indexOf("Aucun participant en attente de retrait");
+  check(
+    "order/[id] : échec des participants → échec visible, jamais un « aucun participant » qui ment",
+    orderScreen.includes("participantsError") &&
+      orderGuardIdx !== -1 &&
+      orderEmptyIdx > orderGuardIdx &&
+      (orderScreen.match(/<LoadError/g) ?? []).length >= 2,
+    "état d'échec dédié, garde avant « Aucun participant », « Réessayer »",
+  );
+  check(
+    "order/[id] : chaque participation a son propre chargeur et le retrait reste bloqué si la liste est inconnue",
+    (orderScreen.match(/attemptLoad\(/g) ?? []).length >= 3 &&
+      orderScreen.includes("participationError") &&
+      /disabled=\{participantsError !== null/.test(orderScreen),
+    "2 sous-chargements (ma participation, participants) + la commande",
+  );
+
   // Les mensonges d'avant ne doivent pas revenir : un échec silencieux affiché
   // comme un résultat vide, ou un texte d'erreur brut affiché tel quel.
   const forbidden = [
@@ -1252,12 +1276,13 @@ async function scenarioK() {
     ["mobile/src/app/merchant/[id].tsx", "merchantRes.error?.message"],
     ["mobile/src/app/(tabs)/profile.tsx", "setHasCard(false)"],
     ["mobile/src/lib/auth.tsx", "supabase.auth.getSession().then("],
+    ["mobile/src/app/order/[id].tsx", "if (!partsRes.error)"],
   ];
   const back = forbidden.filter(([f, s]) => read(f).includes(s));
   check(
     "les chemins silencieux/menteurs de la vague précédente ne reviennent pas",
     back.length === 0,
-    back.length ? `réapparu dans ${back.map(([f]) => f).join(", ")}` : "orders, index, merchant, profile, auth",
+    back.length ? `réapparu dans ${back.map(([f]) => f).join(", ")}` : "orders, index, merchant, profile, auth, order/[id]",
   );
 
   // Le statut d'authentification ne peut plus rester « loading » (sinon l'app
