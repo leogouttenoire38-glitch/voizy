@@ -3,7 +3,7 @@
     "name": "Voizy",
     "slug": "voizy",
     "owner": "adnchaoss-team",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "voizy",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.voizy.app",
-      "versionCode": 11,
+      "versionCode": 12,
       "adaptiveIcon": {
         "backgroundColor": "#2F6F4F",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

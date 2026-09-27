@@ -126,8 +126,52 @@ npm install && npm run dev           # → http://127.0.0.1:5173
 ```
 
 Compte démo : `commercant@voizy.test` / `voizy-demo` (gestionnaire de l'« Épicerie des
-Aligre »). Les commerces sont rattachés au gestionnaire via `merchants.manager_id`
-(mode concierge). En production, restreindre la liste aux commerces du gestionnaire.
+Aligre »). Le back-office ne montre que les commerces du compte connecté
+(`merchants.manager_id`) : plus aucune liste globale, chaque commerçant voit le sien.
+
+On peut aussi **créer un compte commerçant entièrement depuis le web** : « Créer un
+compte » → code à 6 chiffres reçu par e-mail → choix du rôle (« Un commerçant ») →
+nom, catégorie, adresse (géocodée par la même fonction que le mobile) → tableau de
+bord avec Mes offres / Commandes / Statistiques. Aucune intervention de l'équipe.
+
+## Self-service commerçant (mobile et web)
+
+Un commerçant crée son compte seul, publie ses offres et reçoit ses paiements — sans
+passer par l'équipe Voizy. Les deux interfaces appellent **les mêmes RPC** : aucune
+règle métier n'est dupliquée.
+
+1. **Inscription** → écran « Vous êtes plutôt… » (`role.tsx` sur mobile, `RoleChoice`
+   sur le web) → RPC `choose_role`. Un compte a **un seul rôle actif** :
+   `buyer` (voisin) ou `merchant` (commerçant) ; `null` tant que le choix n'est pas fait.
+2. **Création du commerce** → 3 décisions simples (nom, catégorie, adresse géocodée)
+   → RPC `create_my_merchant` : `manager_id = auth.uid()`, `commission_rate = 0`,
+   statut `onboarding`, palier `free` créé dans `merchant_plan`. Un seul commerce par
+   compte (index unique partiel sur `manager_id`).
+3. **Catalogue** → `create_offer`, `update_offer`, `activate_offer`,
+   `deactivate_offer` (réservées au gérant par `assert_merchant_manager`), avec
+   validations en français (« Le prix groupé doit être inférieur ou égal au prix
+   normal. », « Le seuil de participants doit être compris entre 2 et 100. », caution
+   ≤ 200 €). Le formulaire mobile et web est le même : **quatre étapes, une décision
+   par écran** (produit → prix, avec suggestion −20 % → seuil → caution), valeurs
+   pré-remplies. `merchant_offers` renvoie le catalogue avec le nombre de commandes
+   ouvertes par offre.
+4. **Compte de paiement** → `merchant-onboarding` (déjà utilisée par le concierge)
+   avec deux actions : `link` (lien hébergé Stripe, créé au premier appel) et
+   `status` (où en est le compte). Dès que Stripe confirme `details_submitted` +
+   `charges_enabled` + `payouts_enabled`, le commerce passe `active` — par le webhook
+   `account.updated` **ou** par l'action `status` au retour du parcours (le commerçant
+   n'attend pas). Un commerçant `paused` par l'équipe n'est jamais réactivé.
+5. **Tableau de bord mobile** : les onglets acheteur sont remplacés par
+   **Mes offres / Commandes / Statistiques / Profil**. Commandes = retraits à
+   confirmer avec cases no-show (même Edge Function `confirm-pickup` que le web),
+   Statistiques = `merchant_stats` + `merchant_commission_summary` (volume, clients
+   uniques, seuil atteint, « 0 % de commission », palier d'abonnement).
+6. **Bandeau paiements** identique sur les deux plateformes, affiché tant que le
+   compte de paiement n'est pas validé : « Finalisez votre compte de paiement pour
+   recevoir l'argent de vos ventes ».
+
+Rappel économique : **0 % de commission sur les ventes, définitivement** (voir la
+section suivante). La seule rémunération de Voizy est l'abonnement commerçant.
 
 ## Flux de paiement (Stripe Connect Express, mode test)
 
@@ -357,11 +401,27 @@ palier mis à jour en base (résolution par `metadata.merchant_id` **et** par
 customer, jamais écrasé), et compta (revenu transactionnel nul, abonnement
 tracé à part).
 
+Le scénario **M** vérifie le parcours self-service **complet et réel** : un compte
+s'inscrit, choisit son rôle, crée SON commerce (`create_my_merchant` → commission 0,
+plan `free`), publie SON offre (`create_offer`, puis `update_offer`,
+`deactivate_offer`/`activate_offer`), les saisies incohérentes sont refusées en
+français (prix groupé > prix normal, seuil 1, caution 500 €), un **autre compte** ne
+peut ni publier chez lui ni consulter son compte de paiement (refus explicites), le
+commerçant déclenche lui-même son onboarding Stripe (`merchant-onboarding` : `link`
+puis `status`), le commerce devient `active` et apparaît dans Découvrir, puis **un
+voisin** crée une commande sur son offre, **deux voisins la rejoignent avec de vrais
+paiements**, le seuil est atteint, les produits sont **capturés** et le transfert
+Stripe part bien **vers le compte de ce commerçant** (9,50 € → 9,11 €, zéro
+commission) — ses propres statistiques le confirment ensuite (`merchant_stats`,
+`merchant_commission_summary` : 1 commande confirmée, 100 % de seuil atteint, 0 € de
+commission, net 18,22 €). Le commerce de test est supprimé en fin de scénario.
+
 ```bash
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 97 ✅ / 0 ❌ »
+node scripts/e2e-stripe.mjs    # → « 125 ✅ / 0 ❌ » (124 au 2e passage : le compte
+                               #   Connect du commerçant self-service est réutilisé)
 ```
 
 Notes importantes :
@@ -404,7 +464,7 @@ local reste indépendant :
 export SUPABASE_ACCESS_TOKEN=sbp_…
 supabase link --project-ref <ref>
 
-# 2. Pousser les migrations 0001 → 0015 (ordre identique à local)
+# 2. Pousser les migrations 0001 → 0016 (ordre identique à local)
 supabase db push
 
 # 3. Secrets des fonctions côté Cloud (mêmes noms qu'en local)

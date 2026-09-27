@@ -346,3 +346,84 @@ h2 {
 
 .row { display: flex; justify-content: space-between; align-items: center; }
 .row p { margin: 4px 0 0; font-size: var(--taille-corps); }
+/* ---------------------------------------------------------------------------
+   Self-service commerçant — choix de rôle, création du commerce, catalogue.
+   Mêmes tokens que le reste : aucune valeur ad hoc.
+   --------------------------------------------------------------------------- */
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  min-height: 88px;
+  margin-top: 10px;
+  border: 1.5px solid var(--bordure-forte);
+  border-radius: var(--rayon-carte);
+  background: var(--blanc);
+  color: var(--encre);
+}
+.choice:hover:not(:disabled) { background: var(--vert-soft); opacity: 1; }
+.choice strong { display: block; font-size: var(--taille-gros); }
+.choice-hint {
+  display: block;
+  font-size: var(--taille-meta);
+  color: var(--encre-douce);
+  font-weight: 400;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.choice-icon { font-size: 32px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip {
+  border-radius: 999px;
+  padding: 10px 18px;
+  background: var(--blanc);
+  border: 1.5px solid var(--bordure-forte);
+  color: var(--encre-douce);
+  font-size: var(--taille-corps);
+  min-height: 44px;
+}
+.chip.selected {
+  background: var(--vert-marche);
+  border-color: var(--vert-marche);
+  color: var(--blanc);
+  font-weight: 700;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: var(--taille-meta);
+  font-weight: 600;
+}
+.badge.brand { background: var(--vert-soft); color: var(--vert-marche); }
+.badge.accent { background: var(--ocre-soft); color: #7a4e0e; }
+.badge.muted { background: #e7e2d8; color: var(--encre-douce); }
+.badge.danger { background: var(--brique-soft); color: var(--brique); }
+
+.offer-head { display: flex; gap: 10px; flex-wrap: wrap; }
+.offer-title {
+  font-size: var(--taille-gros);
+  font-weight: 700;
+  color: var(--encre);
+  margin: 10px 0 4px;
+}
+.offer-price {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 10px 0 4px;
+  font-size: var(--taille-titre);
+  color: var(--vert-marche);
+}
+.offer-price .strike {
+  font-size: var(--taille-corps);
+  color: var(--encre-douce);
+  text-decoration: line-through;
+  font-weight: 400;
+}
+.offer-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.recap { background: var(--vert-soft); border-color: var(--vert-soft); }
+.recap p { margin: 4px 0; font-size: var(--taille-corps); }

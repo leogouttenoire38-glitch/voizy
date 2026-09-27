@@ -51,9 +51,9 @@ export default function VerifyEmailScreen() {
         setError(humanAuthError(err.message, "Le code n'est pas valide. Réessayez."));
         return;
       }
-      // Session ouverte : le layout aiguille vers /onboarding si le quartier
-      // n'est pas encore choisi, sinon vers les onglets.
-      router.replace(type === "signup" ? "/onboarding" : "/");
+      // Session ouverte : le layout aiguille vers /role si le rôle n'est pas
+      // encore choisi, sinon vers les onglets (ou vers le quartier).
+      router.replace(type === "signup" ? "/role" : "/");
     } catch (err) {
       setError(humanAuthError(err instanceof Error ? err.message : "", "Le code n'est pas valide. Réessayez."));
     } finally {

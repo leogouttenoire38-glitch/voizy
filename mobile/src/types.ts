@@ -8,6 +8,9 @@ export interface Profile {
   created_at: string;
 }
 
+/** Rôle actif unique du compte : voisin (acheteur) ou commerçant. */
+export type UserRole = "buyer" | "merchant";
+
 /** Ligne public.users (l'utilisateur courant uniquement — RLS). */
 export interface UserRow extends Profile {
   email: string | null;
@@ -15,6 +18,8 @@ export interface UserRow extends Profile {
   lat: number | null;
   lng: number | null;
   stripe_customer_id: string | null;
+  /** null = rôle pas encore choisi (écran « Vous êtes plutôt… »). */
+  role: UserRole | null;
   updated_at: string;
 }
 
@@ -66,6 +71,30 @@ export interface Offer {
   deposit_amount: number;
   active: boolean;
   created_at: string;
+}
+
+/** Offre du catalogue commerçant, avec le nombre de commandes encore ouvertes. */
+export interface MerchantOffer extends Offer {
+  open_orders: number;
+}
+
+/** Palier d'abonnement du commerce (Voizy se rémunère uniquement ici). */
+export interface MerchantPlan {
+  merchant_id: string;
+  plan: "free" | "pro";
+  status: "inactive" | "active" | "past_due" | "canceled";
+  current_period_end: string | null;
+}
+
+/** Champs d'une offre envoyés aux RPC create_offer / update_offer. */
+export interface OfferInput {
+  title: string;
+  description: string | null;
+  unit_label: string;
+  base_price: number;
+  group_price: number;
+  threshold: number;
+  deposit_amount: number;
 }
 
 export type GroupOrderStatus = "open" | "confirmed" | "completed" | "cancelled";
@@ -202,3 +231,57 @@ export type SetupPaymentResponse = EdgeOk<{
 }> | EdgeErr;
 
 export type OnboardingResponse = EdgeOk<{ url: string; account_id: string }> | EdgeErr;
+
+/** État du compte de paiement (Stripe Connect Express) du commerce. */
+export type MerchantOnboardingStatus = EdgeOk<{
+  merchant_id: string;
+  has_account: boolean;
+  account_id: string | null;
+  details_submitted: boolean;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  /** true = le commerçant peut encaisser ET recevoir ses virements. */
+  ready: boolean;
+  merchant_status: string;
+}> | EdgeErr;
+
+/** Réponse d'une RPC catalogue (create_offer / update_offer / set_offer_active). */
+export type OfferResponse = EdgeOk<{ offer: Offer }> | EdgeErr;
+
+/** Réponse de create_my_merchant. */
+export type CreateMerchantResponse = EdgeOk<{ merchant: Merchant }> | EdgeErr;
+
+/** Résultat de merchant_stats (RPC du tableau de bord). */
+export interface MerchantStats {
+  total_orders: number;
+  confirmed_orders: number;
+  cancelled_orders: number;
+  open_orders: number;
+  threshold_rate: number;
+  revenue: number;
+  unique_participants: number;
+  avg_fill: number;
+}
+
+/** Résultat de merchant_commission_summary (RPC du tableau de bord). */
+export interface CommissionSummary {
+  current_month: {
+    volume: number;
+    commission: number;
+    fees_estimated: number;
+    fees_real: number;
+    net: number;
+    transactions: number;
+  };
+  /** TOUJOURS 0 : Voizy ne prend jamais de pourcentage sur les ventes. */
+  commission_rate_percent: number;
+  policy: string;
+  billing: {
+    enabled: boolean;
+    plan: "free" | "pro";
+    status: string;
+    is_pro: boolean;
+    current_period_end: string | null;
+    pro_price_eur: number | null;
+  };
+}

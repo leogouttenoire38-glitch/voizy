@@ -17,6 +17,14 @@ export function paymentsReturnUrl(outcome: "success" | "cancel"): string {
   return `${PAYMENTS_LINK}?setup=${outcome}`;
 }
 
+/** Base de retour du parcours Stripe du commerçant (compte de paiement). */
+export const MERCHANT_PAYMENTS_LINK = `${APP_SCHEME}://offers`;
+
+/** URL de retour du parcours de compte de paiement commerçant. */
+export function merchantOnboardingReturnUrl(): string {
+  return `${MERCHANT_PAYMENTS_LINK}?payouts=done`;
+}
+
 /** Lien partageable vers une commande groupée (token de partage). */
 export function orderLink(shareToken: string): string {
   return `${APP_SCHEME}://order/${shareToken}`;

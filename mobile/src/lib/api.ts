@@ -5,6 +5,7 @@ import { fetchWithTimeout, isTimeoutError } from "./net";
 import type {
   ConfirmPickupResponse,
   JoinOrderResponse,
+  MerchantOnboardingStatus,
   OnboardingResponse,
   SetupPaymentResponse,
 } from "../types";
@@ -111,4 +112,33 @@ export function merchantOnboarding(merchantId: string, returnUrl: string) {
   return callEdge<OnboardingResponse>("merchant-onboarding", {
     body: { merchant_id: merchantId, return_url: returnUrl, refresh_url: returnUrl },
   });
+}
+
+// --- Compte de paiement du commerçant (self-service) -------------------------
+// Même fonction que le concierge : elle crée le compte Connect Express la
+// première fois, puis renvoie un lien hébergé à ouvrir. Aucune donnée bancaire
+// ne passe par l'app — tout se fait chez Stripe.
+export function merchantOnboardingLink(merchantId: string, returnUrl: string) {
+  return callEdge<OnboardingResponse>("merchant-onboarding", {
+    method: "POST",
+    body: { merchant_id: merchantId, action: "link", return_url: returnUrl, refresh_url: returnUrl },
+  });
+}
+
+/** Où en est le compte de paiement ? La base est mise à jour si Stripe confirme. */
+export function merchantOnboardingStatus(merchantId: string) {
+  return callEdge<MerchantOnboardingStatus>("merchant-onboarding", {
+    body: { merchant_id: merchantId, action: "status" },
+  });
+}
+
+/**
+ * Abonnement du commerçant (palier pro) : session Stripe Checkout hébergée.
+ * Voizy se rémunère par abonnement — jamais par une commission sur les ventes.
+ */
+export function merchantSubscribe(merchantId: string, returnUrl: string) {
+  return callEdge<{ ok: boolean; url?: string; session_id?: string; error?: string }>(
+    "merchant-subscribe",
+    { body: { merchant_id: merchantId, return_url: returnUrl } },
+  );
 }

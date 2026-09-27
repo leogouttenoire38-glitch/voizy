@@ -17,7 +17,7 @@
 // événement Stripe a eu lieu sans que l'app le sache.
 import { handleOptions, json } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/supabase.ts";
-import { verifyStripeWebhook } from "../_shared/stripe.ts";
+import { connectAccountReady, verifyStripeWebhook } from "../_shared/stripe.ts";
 
 // ---------------------------------------------------------------------------
 // Abonnement commerçant (Stripe Billing) — palier free / pro de merchant_plan
@@ -117,13 +117,13 @@ Deno.serve(async (req: Request) => {
         // Onboarding Connect Express terminé ? → commerçant « active ».
         const account = obj as { id?: string; details_submitted?: boolean; charges_enabled?: boolean; payouts_enabled?: boolean };
         if (!account.id) break;
-        const ready = Boolean(
-          account.details_submitted && account.charges_enabled && account.payouts_enabled,
-        );
+        const ready = connectAccountReady(account);
         await admin
           .from("merchants")
           .update({ status: ready ? "active" : "pending" })
-          .eq("stripe_account_id", account.id);
+          .eq("stripe_account_id", account.id)
+          // Une mise en pause décidée par l'équipe n'est jamais annulée par Stripe.
+          .neq("status", "paused");
         break;
       }
 

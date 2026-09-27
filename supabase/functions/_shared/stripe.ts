@@ -77,6 +77,21 @@ export function stripeGet(path: string) {
   return stripeFetch(path);
 }
 
+/**
+ * Le compte Connect d'un commerçant est-il prêt à encaisser ET à verser ?
+ * Une seule règle, partagée par le webhook (account.updated) et par la
+ * vérification synchrone de merchant-onboarding : ne jamais dupliquer ce test.
+ */
+export function connectAccountReady(account: {
+  details_submitted?: boolean;
+  charges_enabled?: boolean;
+  payouts_enabled?: boolean;
+}): boolean {
+  return Boolean(
+    account.details_submitted && account.charges_enabled && account.payouts_enabled,
+  );
+}
+
 export function stripePost(path: string, form: Record<string, unknown> = {}) {
   return stripeFetch(path, { method: "POST", form });
 }

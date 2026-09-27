@@ -41,6 +41,17 @@
 //      français + un bouton « Réessayer », jamais un chargement infini ni un
 //      « aucun résultat » mensonger. Garde-fous sur les écrans et sur
 //      mobile/src/lib/auth.tsx (statut toujours résolu).
+//   M. Self-service commerçant, de bout en bout : un compte s'inscrit, choisit
+//      son rôle, crée SON commerce (create_my_merchant → commission 0, plan
+//      free) et publie SON offre (create_offer, modifiée puis retirée/remise).
+//      Un autre compte ne peut ni toucher au catalogue ni ouvrir le compte de
+//      paiement (refus explicites). Le commerçant déclenche lui-même son
+//      onboarding Stripe Connect (merchant-onboarding + action status), puis un
+//      VOISIN crée une commande sur son offre, deux voisins la rejoignent avec
+//      de vrais paiements, le seuil est atteint, les produits sont CAPTURÉS et
+//      le transfert Stripe part bien vers SON compte : 100 % du prix − frais
+//      Stripe, zéro commission Voizy — puis ses propres statistiques le
+//      confirment (merchant_stats, merchant_commission_summary).
 //   L. Modèle économique 0 % : commission_rate = 0 sur toute nouvelle
 //      commande, commission_amount = 0 en base et transfert Stripe = 100 % du
 //      prix − frais Stripe (aucune commission cachée). Paliers d'abonnement :
@@ -230,6 +241,23 @@ async function dbUpdate(table, query, payload) {
   if (status !== 200) throw new Error(`dbUpdate ${table} → ${status} ${JSON.stringify(data)}`);
   return data;
 }
+async function dbDelete(table, query) {
+  const { status, data } = await http(`${URL}/rest/v1/${table}?${query}`, {
+    method: "DELETE",
+    headers: serviceHeaders(),
+  });
+  if (![200, 204].includes(status)) throw new Error(`dbDelete ${table} → ${status} ${JSON.stringify(data)}`);
+  return data;
+}
+
+/** Supprime un compte d'authentification (et sa ligne users en cascade). */
+async function deleteAuthUser(userId) {
+  const { status } = await http(`${URL}/auth/v1/admin/users/${userId}`, {
+    method: "DELETE",
+    headers: serviceHeaders(),
+  });
+  return status;
+}
 async function rpcAsUser(name, params, token) {
   const { status, data } = await http(`${URL}/rest/v1/rpc/${name}`, {
     method: "POST",
@@ -342,11 +370,14 @@ const INDIVIDUAL_TEST = {
   address: { line1: "address_full_match", city: "Paris", postal_code: "75012", country: "FR" },
 };
 
-async function createCustomAccount() {
-  const now = Math.floor(Date.now() / 1000);
+async function createCustomAccount({ name = "Épicerie des Aligre (E2E)", email = INDIVIDUAL_TEST.email } = {}) {
   // 1. Compte token : identité + acceptation des CGU (requirement_collection=application)
   const tok = await stripeReq("POST", "/v1/tokens", {
-    account: { business_type: "individual", tos_shown_and_accepted: true, individual: INDIVIDUAL_TEST },
+    account: {
+      business_type: "individual",
+      tos_shown_and_accepted: true,
+      individual: { ...INDIVIDUAL_TEST, email },
+    },
   });
   // 2. Création du compte (obligatoire pour une plateforme FR)
   const acct = await stripeReq("POST", "/v1/accounts", {
@@ -356,7 +387,7 @@ async function createCustomAccount() {
     "controller[stripe_dashboard][type]": "none",
     "controller[fees][payer]": "application",
     "controller[losses][payments]": "application",
-    "business_profile[name]": "Épicerie des Aligre (E2E)",
+    "business_profile[name]": name,
     "business_profile[mcc]": "5411",
     "business_profile[url]": "https://voizy.app",
     "capabilities[card_payments][requested]": "true",
@@ -376,6 +407,35 @@ async function createCustomAccount() {
     if (a.charges_enabled === true) return a;
   }
   throw new Error(`compte ${acct.id} non activé après 3 min (requirements: ${JSON.stringify((await stripeReq("GET", `/v1/accounts/${acct.id}`)).requirements?.errors ?? [])})`);
+}
+
+// Le self-service crée SON propre compte Connect : le KYC hébergé (Express) est
+// humain, on le remplace par le compte test 100 % API — même moteur de paiement.
+// Provisionné une fois, réutilisé ensuite (le state est partagé avec le scénario A).
+async function ensureSelfServiceAccount() {
+  const saved = readConnectState()?.merchant_account_id;
+  if (saved) {
+    try {
+      const a = await stripeReq("GET", `/v1/accounts/${saved}`);
+      if (a.charges_enabled === true) {
+        note(`compte Connect du nouveau commerçant réutilisé (${saved})`);
+        return a;
+      }
+    } catch {
+      /* compte supprimé côté Stripe → recréé */
+    }
+  }
+  const acct = await createCustomAccount({
+    name: "Commerce self-service (E2E)",
+    email: "nouveau-commercant@voizy.test",
+  });
+  writeConnectState({ ...(readConnectState() ?? {}), merchant_account_id: acct.id });
+  check(
+    "compte de paiement du nouveau commerçant provisionné (équivalent du KYC hébergé)",
+    acct.charges_enabled === true,
+    acct.id,
+  );
+  return acct;
 }
 
 async function scenarioA() {
@@ -1250,6 +1310,13 @@ async function scenarioK() {
     "mobile/src/app/new-order.tsx",
     "mobile/src/app/merchant/[id].tsx",
     "mobile/src/app/order/[id].tsx",
+    // Écrans commerçant (self-service) : mêmes garanties que les écrans voisins.
+    "mobile/src/app/(tabs)/offers.tsx",
+    "mobile/src/app/(tabs)/merchant-orders.tsx",
+    "mobile/src/app/(tabs)/stats.tsx",
+    "mobile/src/app/(tabs)/profile.tsx",
+    "mobile/src/app/offer-new.tsx",
+    "mobile/src/app/offer-edit.tsx",
   ];
   const noGuard = listScreens.filter((f) => {
     const src = read(f);
@@ -1558,9 +1625,344 @@ async function scenarioL() {
 }
 
 // ============================================================================
+// Scénario M — Self-service : un commerçant de zéro jusqu'au paiement reçu
+// ============================================================================
+async function scenarioM() {
+  console.log("\n=== M. Self-service : commerce créé de zéro → offre publiée → paiement reçu ===");
+  const stamp = Date.now();
+  const owner = await authUser(`commercant-self-${stamp}@voizy.test`, "Léa Nouveau Commerce");
+
+  // --- 1. Le rôle est choisi par la personne elle-même (RPC partagée mobile/web)
+  const role = await rpcAsUser("choose_role", { p_role: "merchant" }, owner.access_token);
+  check(
+    "rôle « commerçant » choisi par l'inscrit lui-même",
+    role.status === 200 && role.data?.role === "merchant",
+    JSON.stringify(role.data)?.slice(0, 80),
+  );
+  const badRole = await rpcAsUser("choose_role", { p_role: "vendeur" }, owner.access_token);
+  check(
+    "rôle inconnu refusé avec un message en français",
+    badRole.status >= 400 && /voisin|commerçant/i.test(String(badRole.data?.message ?? "")),
+    String(badRole.data?.message ?? "").slice(0, 110),
+  );
+
+  // --- 2. L'adresse du commerce est située par la même fonction que l'app
+  const geo = await callFn("geocode", { address: "12 rue de Cotte, 75012 Paris" }, owner.access_token);
+  const located = geo.status === 200 && geo.data?.ok === true && Number.isFinite(geo.data?.lat);
+  check(
+    "adresse située par la fonction geocode de l'app (repli sans coordonnées si indisponible)",
+    located || geo.status === 404,
+    located ? `lat=${geo.data.lat}, lng=${geo.data.lng}` : "géocodeur injoignable",
+  );
+  const lat = located ? geo.data.lat : 48.8496;
+  const lng = located ? geo.data.lng : 2.3749;
+  if (!located) note("repli : coordonnées d'Aligre utilisées pour que la visibilité reste testable");
+
+  // --- 3. La fiche commerce, créée par le commerçant lui-même
+  const created = await rpcAsUser(
+    "create_my_merchant",
+    {
+      p_name: `Épicerie self-service ${stamp}`,
+      p_category: "epicerie",
+      p_address: "12 rue de Cotte, 75012 Paris",
+      p_lat: lat,
+      p_lng: lng,
+      p_description: "Commerce créé par le scénario E2E (self-service).",
+    },
+    owner.access_token,
+  );
+  const merchantId = created.data?.merchant?.id;
+  check(
+    "commerce créé par le commerçant (manager_id = son compte, commission 0, statut onboarding)",
+    created.status === 200 && Boolean(merchantId) &&
+      created.data.merchant.manager_id === owner.user.id &&
+      Number(created.data.merchant.commission_rate) === 0 &&
+      created.data.merchant.status === "onboarding",
+    `commission=${created.data?.merchant?.commission_rate} · statut=${created.data?.merchant?.status}`,
+  );
+  const ownerRow = (await dbSelect("users", `select=role&id=eq.${owner.user.id}`))[0];
+  const planRow = (await dbSelect("merchant_plan", `select=plan,status&merchant_id=eq.${merchantId}`))[0];
+  check(
+    "compte passé en rôle commerçant + palier gratuit créé par défaut",
+    ownerRow?.role === "merchant" && planRow?.plan === "free",
+    `role=${ownerRow?.role} · plan=${planRow?.plan}`,
+  );
+  const dup = await rpcAsUser(
+    "create_my_merchant",
+    { p_name: "Doublon", p_category: "epicerie", p_address: "1 rue Test, 75012 Paris" },
+    owner.access_token,
+  );
+  check(
+    "un second commerce pour le même compte est refusé",
+    dup.status >= 400 && /déjà/i.test(String(dup.data?.message ?? "")),
+    String(dup.data?.message ?? "").slice(0, 110),
+  );
+
+  // --- 4. Personne d'autre ne touche à ce commerce
+  const neighbor = await authUser("participant@voizy.test", "Nadia");
+  const makeOffer = (overrides) =>
+    rpcAsUser(
+      "create_offer",
+      {
+        p_merchant_id: merchantId,
+        p_title: "Huile d'olive 75 cl",
+        p_unit_label: "bouteille",
+        p_base_price: 10,
+        p_group_price: 8,
+        p_threshold: 5,
+        p_deposit_amount: 5,
+        ...overrides,
+      },
+      owner.access_token,
+    );
+  const stolen = await rpcAsUser(
+    "create_offer",
+    {
+      p_merchant_id: merchantId,
+      p_title: "Offre volée",
+      p_unit_label: "unité",
+      p_base_price: 10,
+      p_group_price: 8,
+      p_threshold: 5,
+      p_deposit_amount: 5,
+    },
+    neighbor.access_token,
+  );
+  check(
+    "publier chez un commerce qui n'est pas le sien est refusé",
+    stolen.status >= 400 && /gérant/i.test(String(stolen.data?.message ?? "")),
+    String(stolen.data?.message ?? "").slice(0, 110),
+  );
+  const outsiderStatus = await callFn(
+    "merchant-onboarding",
+    { merchant_id: merchantId, action: "status" },
+    neighbor.access_token,
+  );
+  check(
+    "le compte de paiement n'est pas consultable par un autre compte",
+    outsiderStatus.status === 403,
+    `status=${outsiderStatus.status}`,
+  );
+
+  // --- 5. Règles de saisie : refus explicites, jamais de données incohérentes
+  const badPrice = await makeOffer({ p_group_price: 12 });
+  check(
+    "prix groupé supérieur au prix normal refusé",
+    badPrice.status >= 400 && /prix groupé/i.test(String(badPrice.data?.message ?? "")),
+    String(badPrice.data?.message ?? "").slice(0, 110),
+  );
+  const badThreshold = await makeOffer({ p_threshold: 1 });
+  check(
+    "seuil hors bornes refusé (2 à 100 participants)",
+    badThreshold.status >= 400 && /seuil/i.test(String(badThreshold.data?.message ?? "")),
+    String(badThreshold.data?.message ?? "").slice(0, 110),
+  );
+  const badDeposit = await makeOffer({ p_deposit_amount: 500 });
+  check(
+    "caution invraisemblable refusée (montant symbolique)",
+    badDeposit.status >= 400 && /caution/i.test(String(badDeposit.data?.message ?? "")),
+    String(badDeposit.data?.message ?? "").slice(0, 110),
+  );
+
+  // --- 6. L'offre réelle : publiée, corrigée, retirée puis remise
+  const offerRes = await makeOffer({});
+  const offerId = offerRes.data?.offer?.id;
+  check(
+    "offre publiée via create_offer (même RPC pour le mobile et le web)",
+    offerRes.status === 200 && Boolean(offerId) && offerRes.data.offer.active === true,
+    offerId,
+  );
+  const catalogue = await rpcAsUser("merchant_offers", { p_merchant_id: merchantId }, owner.access_token);
+  check(
+    "le catalogue du commerce contient l'offre (0 commande en cours)",
+    Array.isArray(catalogue.data) && catalogue.data.length === 1 && catalogue.data[0].open_orders === 0,
+    `${Array.isArray(catalogue.data) ? catalogue.data.length : "?"} offre(s)`,
+  );
+  const updated = await rpcAsUser(
+    "update_offer",
+    {
+      p_offer_id: offerId,
+      p_title: "Huile d'olive 75 cl (bio)",
+      p_description: "Offre corrigée par le commerçant lui-même.",
+      p_unit_label: "bouteille",
+      p_base_price: 12,
+      p_group_price: 9.5,
+      p_threshold: 2,
+      p_deposit_amount: 5,
+    },
+    owner.access_token,
+  );
+  check(
+    "offre corrigée par son gérant (nom, prix, seuil 2)",
+    updated.status === 200 && updated.data?.offer?.threshold === 2 &&
+      Number(updated.data?.offer?.group_price) === 9.5,
+    `seuil=${updated.data?.offer?.threshold} · prix groupé=${updated.data?.offer?.group_price}`,
+  );
+  const off = await rpcAsUser("deactivate_offer", { p_offer_id: offerId }, owner.access_token);
+  const on = await rpcAsUser("activate_offer", { p_offer_id: offerId }, owner.access_token);
+  check(
+    "offre retirée puis remise au catalogue par son gérant",
+    off.data?.offer?.active === false && on.data?.offer?.active === true,
+    `retirée=${off.data?.offer?.active} · remise=${on.data?.offer?.active}`,
+  );
+
+  // --- 7. Compte de paiement : déclenché par le commerçant, réservé à lui
+  const beforeAccount = await callFn(
+    "merchant-onboarding",
+    { merchant_id: merchantId, action: "status" },
+    owner.access_token,
+  );
+  check(
+    "statut de paiement consultable par le gérant (aucun compte encore)",
+    beforeAccount.status === 200 && beforeAccount.data?.ok === true &&
+      beforeAccount.data.has_account === false && beforeAccount.data.merchant_status === "onboarding",
+    JSON.stringify(beforeAccount.data)?.slice(0, 110),
+  );
+  const link = await callFn(
+    "merchant-onboarding",
+    { merchant_id: merchantId, action: "link", return_url: "http://127.0.0.1:5173/" },
+    owner.access_token,
+  );
+  check(
+    "lien d'onboarding Stripe créé à la demande du commerçant",
+    link.status === 200 && link.data?.ok === true && /^https:\/\//.test(String(link.data?.url ?? "")),
+    String(link.data?.url ?? link.data?.error ?? "").slice(0, 56),
+  );
+
+  const account = await ensureSelfServiceAccount();
+  await dbUpdate("merchants", `id=eq.${merchantId}`, { stripe_account_id: account.id });
+  const webhook = await sendWebhook("account.updated", { ...account, payouts_enabled: true });
+  const merchantRow = (await dbSelect("merchants", `select=status&id=eq.${merchantId}`))[0];
+  const afterAccount = await callFn(
+    "merchant-onboarding",
+    { merchant_id: merchantId, action: "status" },
+    owner.access_token,
+  );
+  check(
+    "le commerce devient visible (active) une fois le compte de paiement validé",
+    webhook.status === 200 && merchantRow?.status === "active" && afterAccount.data?.ready === true,
+    `statut=${merchantRow?.status} · prêt=${afterAccount.data?.ready}`,
+  );
+
+  const nearby = await rpcAsUser(
+    "nearby_merchants",
+    { p_lat: lat, p_lng: lng, p_radius_m: 3000, p_limit: 50 },
+    neighbor.access_token,
+  );
+  const found = (Array.isArray(nearby.data) ? nearby.data : []).find((m) => m.id === merchantId);
+  check(
+    "le nouveau commerce apparaît dans Découvrir, son offre comptée",
+    Boolean(found) && Number(found.active_offers) >= 1,
+    found ? `${found.name} · ${found.active_offers} offre(s)` : "absent du flux",
+  );
+
+  // --- 8. Un voisin commande sur cette offre, deux voisins paient réellement
+  const camille = await authUser("organisateur@voizy.test", "Camille");
+  const second = await authUser("participant2@voizy.test", "Karim");
+  for (const [name, u] of [["Nadia", neighbor], ["Karim", second]]) {
+    const customer = await ensureCustomer(u.user.id, u.user.email);
+    await attachCard(customer, "4242424242424242");
+    note(`${name} : carte Visa test rattachée`);
+  }
+
+  const order = await createOrder(camille.access_token, merchantId, offerId, future(3));
+  check(
+    "commande créée par un voisin sur l'offre du nouveau commerce",
+    order.status === "open" && order.merchant_id === merchantId && order.offer_id === offerId,
+    order.id,
+  );
+  const j1 = await callFn("join-order", { group_order_id: order.id }, neighbor.access_token);
+  const j2 = await callFn("join-order", { group_order_id: order.id }, second.access_token);
+  const confirmed = (await dbSelect(
+    "group_orders",
+    `select=status,participants_current,threshold&id=eq.${order.id}`,
+  ))[0];
+  check(
+    "seuil atteint : commande confirmée et participants prélevés",
+    j1.data?.ok === true && j2.data?.ok === true && confirmed?.status === "confirmed" &&
+      confirmed.participants_current === 2,
+    `${confirmed?.participants_current}/${confirmed?.threshold} · ${confirmed?.status}`,
+  );
+
+  // --- 9. L'argent part vers SON compte : 100 % du prix − frais Stripe, 0 € de commission
+  const parts = await dbSelect(
+    "participations",
+    `select=id,status,product_pi_id,deposit_pi_id&group_order_id=eq.${order.id}`,
+  );
+  const paid = parts.filter((p) => p.status === "paid");
+  let routed = 0;
+  for (const p of paid) {
+    const prod = await getPi(p.product_pi_id);
+    const destination = prod.transfer_data?.destination;
+    if (
+      prod.status === "succeeded" &&
+      prod.amount_received === 950 &&
+      prod.transfer_data?.amount === 911 &&
+      destination === account.id
+    ) {
+      routed++;
+    } else {
+      note(`PI ${prod.id} : statut=${prod.status} reçu=${prod.amount_received} transfert=${prod.transfer_data?.amount} → ${destination}`);
+    }
+  }
+  check(
+    "2 paiements capturés et transférés au compte du nouveau commerçant (9,50 € → 9,11 € = 100 % − frais Stripe)",
+    paid.length === 2 && routed === 2,
+    `${routed}/2 vers ${account.id}`,
+  );
+
+  const txs = await dbSelect(
+    "transactions",
+    `select=type,gross_amount,commission_amount,net_transfer&participation_id=in.(${paid.map((p) => `"${p.id}"`).join(",")})&type=eq.product_payment`,
+  );
+  check(
+    "commission Voizy = 0 € sur ces paiements (aucun pourcentage sur les ventes)",
+    txs.length === 2 && txs.every((t) => Number(t.commission_amount) === 0),
+    txs.map((t) => `${t.commission_amount} €`).join(", "),
+  );
+
+  // --- 10. Le commerçant voit ses propres chiffres (ses RPC, ses écrans)
+  const stats = await rpcAsUser("merchant_stats", { p_merchant_id: merchantId }, owner.access_token);
+  const summary = await rpcAsUser(
+    "merchant_commission_summary",
+    { p_merchant_id: merchantId },
+    owner.access_token,
+  );
+  check(
+    "statistiques du commerçant : 1 commande confirmée, seuil atteint 100 %",
+    stats.status === 200 && stats.data?.confirmed_orders === 1 && stats.data?.total_orders === 1 &&
+      Number(stats.data?.threshold_rate) === 100,
+    JSON.stringify(stats.data)?.slice(0, 150),
+  );
+  check(
+    "transparence : 0 % de commission + palier gratuit affichés au commerçant",
+    summary.status === 200 && Number(summary.data?.commission_rate_percent) === 0 &&
+      summary.data?.billing?.plan === "free" &&
+      Number(summary.data?.current_month?.commission ?? -1) === 0,
+    JSON.stringify(summary.data?.current_month)?.slice(0, 150),
+  );
+  check(
+    "net affiché au commerçant = 2 × (9,50 € − 0,39 € de frais Stripe)",
+    Math.abs(Number(summary.data?.current_month?.net ?? 0) - 18.22) < 0.005 &&
+      Number(summary.data?.current_month?.transactions) === 2,
+    `net=${summary.data?.current_month?.net} €`,
+  );
+
+  // --- 11. Nettoyage : le commerce de test ne reste pas dans le pilote
+  try {
+    await dbDelete("group_orders", `merchant_id=eq.${merchantId}`);
+    await dbDelete("merchants", `id=eq.${merchantId}`);
+    const del = await deleteAuthUser(owner.user.id);
+    check("nettoyage : commerce et compte de test supprimés", del === 200, `status=${del}`);
+  } catch (err) {
+    note(`nettoyage partiel : ${err.message}`);
+  }
+}
+
+// ============================================================================
 // Exécution séquentielle
 // ============================================================================
-const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ, scenarioK, scenarioL];
+const scenarios = [scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, scenarioG, scenarioH, scenarioI, scenarioJ, scenarioK, scenarioL, scenarioM];
 const only = process.argv[2];
 for (const s of scenarios) {
   if (only && !s.name.toLowerCase().endsWith(only.toLowerCase())) continue;

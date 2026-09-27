@@ -18,7 +18,7 @@ type ReturnSignal = { promise: Promise<void>; cleanup: () => void };
  * toujours — sur Android, openAuthSessionAsync (polyfill Custom Tab + AppState)
  * peut sinon ne jamais se résoudre et laisser l'écran en chargement.
  */
-function onceReturnedToApp(): ReturnSignal {
+function onceReturnedToApp(returnLink: string = PAYMENTS_LINK): ReturnSignal {
   let done = false;
   let cleanup = () => {};
   const promise = new Promise<void>((resolve) => {
@@ -30,7 +30,7 @@ function onceReturnedToApp(): ReturnSignal {
     };
     const subscriptions = [
       Linking.addEventListener("url", ({ url }) => {
-        if (url.startsWith(PAYMENTS_LINK)) finish();
+        if (url.startsWith(returnLink)) finish();
       }),
       AppState.addEventListener("change", (state) => {
         if (state === "active") finish();
@@ -45,9 +45,17 @@ function onceReturnedToApp(): ReturnSignal {
   return { promise, cleanup };
 }
 
-/** Ouvre la page Stripe et attend le retour de l'utilisateur (jamais bloquant). */
-async function openStripeAndWait(url: string): Promise<void> {
-  const returned = onceReturnedToApp();
+/**
+ * Ouvre une page Stripe hébergée et attend le retour de l'utilisateur dans
+ * l'app (jamais bloquant : trois filets — deep link, AppState, délai maximum).
+ * Utilisé par l'enregistrement de carte (participant) et par le compte de
+ * paiement du commerçant.
+ */
+export async function openStripeHostedFlow(
+  url: string,
+  returnLink: string = PAYMENTS_LINK,
+): Promise<void> {
+  const returned = onceReturnedToApp(returnLink);
   try {
     const session = WebBrowser.openAuthSessionAsync(url, PAYMENTS_LINK);
     const outcome = await Promise.race([
@@ -111,7 +119,7 @@ export async function startCardSetup(): Promise<CardSetupResult> {
   }
 
   try {
-    await openStripeAndWait(session.url);
+    await openStripeHostedFlow(session.url);
   } catch {
     return { ok: false, error: "Impossible d'ouvrir la page de paiement. Réessayez." };
   }

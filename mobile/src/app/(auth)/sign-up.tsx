@@ -57,8 +57,9 @@ export default function SignUpScreen() {
         return;
       }
       if (data.session) {
-        // Compte créé + session ouverte → on passe au choix du quartier.
-        router.replace("/onboarding");
+        // Compte créé + session ouverte → on passe au choix du rôle
+        // (voisin ou commerçant), puis au parcours correspondant.
+        router.replace("/role");
       } else {
         // Confirmation par code e-mail : on passe à la saisie du code reçu.
         router.replace({ pathname: "/verify-email", params: { email, type: "signup" } });
