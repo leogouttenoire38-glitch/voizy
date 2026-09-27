@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
+import Constants from "expo-constants";
 import { Button, Card, Row, Screen, ScreenHeader } from "../../components/ui";
 import { colors, fonts, fontSizes, radius, spacing, touch } from "../../theme";
 import { useAuth } from "../../lib/auth";
@@ -9,6 +10,14 @@ import { setupPaymentStatus } from "../../lib/api";
 import { attemptLoad } from "../../lib/load";
 
 type CardState = "loading" | "yes" | "no" | "unknown";
+
+// Version affichée : lue dans la config embarquée du build, pour qu'elle
+// corresponde toujours au binaire réellement installé (jamais de valeur figée).
+const appVersion = Constants.expoConfig?.version ?? "0.2.0";
+const appBuildNumber = Constants.expoConfig?.android?.versionCode;
+const buildLabel = appBuildNumber
+  ? `Voizy · v${appVersion} (build ${appBuildNumber})`
+  : `Voizy · v${appVersion}`;
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -106,7 +115,7 @@ export default function ProfileScreen() {
 
       <View style={{ height: spacing.lg }} />
       <Button title="Se déconnecter" variant="danger" onPress={signOut} loading={signingOut} />
-      <Text style={styles.version}>Voizy · v0.1.0</Text>
+      <Text style={styles.version}>{buildLabel}</Text>
     </Screen>
   );
 }
