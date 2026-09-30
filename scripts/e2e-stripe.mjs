@@ -33,7 +33,9 @@
 //      serveur muet est abandonné au délai (module net.ts réellement importé),
 //      les erreurs GoTrue deviennent des messages français sans jargon, et les
 //      écrans d'auth (connexion, inscription, code + renvoi) gardent leur
-//      try/catch/finally.
+//      try/catch/finally. Le quota d'envoi d'e-mails (429) a son propre message
+//      humain — « beaucoup de monde s'inscrit » — identique sur mobile et web,
+//      et le nombre de secondes de la fenêtre anti-abus n'est pas perdu.
 //   K. Listes : même invariant pour les chargements d'écran (commerçants,
 //      offres, commandes, notifications, fiches). Le chargeur partagé de l'app
 //      (mobile/src/lib/load.ts, importé tel quel) rend toujours un résultat :
@@ -1137,7 +1139,55 @@ async function scenarioJ() {
     `HTTP ${resend.status} en ${resendMs} ms`,
   );
 
-  // 5. Aucun message non reconnu ne doit laisser passer du texte technique
+  // 5. Quota d'envoi d'e-mails d'authentification (429) : c'est le cas « tout un
+  //    quartier s'inscrit la même heure », pas une faute de l'utilisateur. Les
+  //    corps testés sont EXACTEMENT ceux de GoTrue (`code`, `error_code`, `msg`) :
+  //    les deux limites qui se cachent derrière le même `error_code`
+  //    (`over_email_send_rate_limit`) — le quota du projet et la fenêtre par
+  //    adresse — doivent ressortir en français, jamais le code brut.
+  const quotaRaw = "email rate limit exceeded";
+  const quotaMsg = errors.humanAuthError(quotaRaw, fallback);
+  check(
+    "quota d'e-mails atteint (429) → message humain, jamais le code brut",
+    /monde s'inscrit/i.test(quotaMsg) && /minutes/i.test(quotaMsg) &&
+      quotaMsg !== quotaRaw && !JARGON.test(quotaMsg),
+    `${quotaRaw} → « ${quotaMsg} »`,
+  );
+
+  const waitRaw = "For security purposes, you can only request this after 42 seconds.";
+  const waitMsg = errors.humanAuthError(waitRaw, fallback);
+  check(
+    "renvoi trop rapide (429) → délai restant affiché en français",
+    /42/.test(waitMsg) && /sécurité/i.test(waitMsg) && !JARGON.test(waitMsg),
+    `${waitRaw} → « ${waitMsg} »`,
+  );
+
+  // Le code machine seul (racine de l'erreur, sans `msg`) doit donner le même
+  // résultat : c'est la forme que reçoivent certaines versions du client.
+  const quotaCode = errors.humanAuthError("over_email_send_rate_limit", fallback);
+  check(
+    "code machine seul (`over_email_send_rate_limit`) → même message humain",
+    quotaCode === quotaMsg && !JARGON.test(quotaCode),
+    quotaCode,
+  );
+
+  // Le back-office web est un miroir : exactement le même texte, sinon les deux
+  // interfaces raconteraient deux histoires différentes au même utilisateur.
+  const webErrors = await import(repoFile("web/src/errors.ts").href);
+  check(
+    "web et mobile : un seul et même message pour le quota d'e-mails",
+    webErrors.humanError(quotaRaw, fallback) === quotaMsg &&
+      webErrors.humanError(waitRaw, fallback) === waitMsg,
+    `web : « ${webErrors.humanError(quotaRaw, fallback)} »`,
+  );
+  check(
+    "web : aucun message anglais brut à l'écran (repli de l'écran sinon)",
+    webErrors.humanError("AuthApiError: unexpected_failure", fallback) === fallback &&
+      webErrors.humanError('PostgrestError: relation "merchants" does not exist', fallback) === fallback,
+    webErrors.humanError("AuthApiError: unexpected_failure", fallback),
+  );
+
+  // 6. Aucun message non reconnu ne doit laisser passer du texte technique
   const unknown = [
     "TypeError: Failed to fetch",
     "AuthApiError: invalid_grant",
@@ -1152,7 +1202,7 @@ async function scenarioJ() {
     unknown.map((m) => `${m} → « ${errors.humanAuthError(m, fallback)} »`).join(" | "),
   );
 
-  // 6. Garde-fous de convention : le câblage de l'app ne doit pas être retiré.
+  // 7. Garde-fous de convention : le câblage de l'app ne doit pas être retiré.
   const read = (rel) => readFileSync(repoFile(rel), "utf8");
   const client = read("mobile/src/lib/supabase.ts");
   check(
@@ -1171,6 +1221,28 @@ async function scenarioJ() {
     "écrans à bouton : try/catch/finally conservés",
     missing.length === 0,
     missing.length ? `manquant dans ${missing.join(", ")}` : "sign-in, sign-up, verify-email, new-order",
+  );
+
+  // ... et le même invariant pour TOUS les flux qui consomment le quota
+  // d'e-mails : inscription, connexion par code, renvoi de code — mobile et web.
+  // Un `setError(err.message)` afficherait l'anglais de GoTrue à l'écran ; ces
+  // cinq fichiers doivent tous passer par le traducteur (humanAuthError /
+  // humanError). Aucun flux « mot de passe oublié » n'existe encore dans l'app :
+  // le jour où il arrive, il suffit de l'ajouter à cette liste.
+  const emailFlows = [
+    "mobile/src/app/(auth)/sign-up.tsx",
+    "mobile/src/app/(auth)/sign-in.tsx",
+    "mobile/src/app/(auth)/verify-email.tsx",
+    "web/src/Auth.tsx",
+    "web/src/App.tsx",
+  ];
+  const rawShown = emailFlows.filter((f) =>
+    /set(?:Error|SessionError)\(\s*(?:err|error|res\.error)\b/.test(read(f)),
+  );
+  check(
+    "flux d'e-mail d'auth : aucun message brut affiché (traducteur partout)",
+    rawShown.length === 0,
+    rawShown.length ? `brut dans ${rawShown.join(", ")}` : emailFlows.join(", "),
   );
 }
 

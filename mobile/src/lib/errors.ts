@@ -25,6 +25,24 @@ export function humanAuthError(message: string | null | undefined, fallback: str
     return "Un compte existe déjà avec cet e-mail. Connectez-vous à la place.";
   if (/email.*not.*valid|invalid email/i.test(m))
     return "Cette adresse e-mail ne semble pas valide. Vérifiez-la.";
+
+  // Fenêtre anti-abus par adresse (une demande par minute — `smtp_max_frequency`) :
+  // GoTrue met le nombre de secondes restantes dans son message, on le réutilise
+  // au lieu de le jeter (l'utilisateur en a besoin sur le bouton « Renvoyer »).
+  if (/only request this after|for security purposes/i.test(m)) {
+    const seconds = (m.match(/after\s+(\d+)\s*seconds?/) ?? [])[1];
+    return seconds
+      ? `Pour votre sécurité, patientez encore ${seconds} s avant de demander un nouveau code.`
+      : "Pour votre sécurité, patientez une minute avant de demander un nouveau code.";
+  }
+
+  // Quota d'envoi d'e-mails d'authentification du projet (429) : plusieurs
+  // personnes s'inscrivent en même temps, l'utilisateur n'a rien fait de mal.
+  // Le texte brut (« Email rate limit exceeded ») et le code machine
+  // (`over_email_send_rate_limit`) ne lui apprendraient rien : on explique.
+  if (/email rate limit|email_send_rate_limit|too many emails/i.test(m))
+    return "Beaucoup de monde s'inscrit en ce moment. Réessayez dans quelques minutes.";
+
   if (/rate.limit|too many requests|over.*request/i.test(m))
     return "Trop de demandes. Attendez un peu puis réessayez.";
   if (/network|fetch|offline|failed to fetch/i.test(m))

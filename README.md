@@ -380,8 +380,12 @@ récurser), **parcours de paiement carte absente → enregistrement → reprise*
 Stripe, une URL sans hôte est refusée, et `setup-payment` reflète l'état réel
 « carte enregistrée »), **auth sans blocage silencieux** (scénario J : un serveur
 muet est abandonné au délai par le module `net.ts` réellement importé, les
-erreurs GoTrue deviennent des messages français sans jargon, et les écrans à
-bouton gardent leur `try/catch/finally`) et **listes sans chargement infini ni
+erreurs GoTrue deviennent des messages français sans jargon — dont le quota
+d'envoi d'e-mails (429), qui affiche « Beaucoup de monde s'inscrit en ce
+moment » sur mobile **et** sur web, tandis que la fenêtre anti-abus par adresse
+rend le nombre de secondes restantes — et tous les flux qui consomment ce quota,
+web compris, passent par le traducteur : aucun texte anglais brut à l'écran) et
+**listes sans chargement infini ni
 mensonge** (scénario K : `lib/load.ts` réellement importé — une tâche qui
 rejette rend un échec exploitable, un serveur muet est abandonné au délai, un
 échec montre « Échec du chargement » + « Réessayer », et les chemins silencieux
@@ -420,8 +424,8 @@ commission, net 18,22 €). Le commerce de test est supprimé en fin de scénari
 # Séquence fiable (le serve de fonctions bloque `db reset` s'il tourne) :
 taskkill //F //IM supabase.exe 2>/dev/null; supabase db reset
 cd supabase && nohup supabase functions serve --env-file functions/.env &   # autre terminal
-node scripts/e2e-stripe.mjs    # → « 125 ✅ / 0 ❌ » (124 au 2e passage : le compte
-                               #   Connect du commerçant self-service est réutilisé)
+node scripts/e2e-stripe.mjs    # → « 130 ✅ / 0 ❌ » (relancé aussitôt : 130 ✅ aussi —
+                               #   les comptes Connect existants sont réutilisés)
 ```
 
 Notes importantes :
@@ -492,6 +496,15 @@ Points vérifiés au déploiement (sept. 2026) :
   qu'à la création) pointé sur `https://<ref>.supabase.co/functions/v1/stripe-webhook`.
 - **Cron** : planifier `close-order` et `dispatch-notifications` via Dashboard →
   Edge Functions → Scheduled (intervalle conseillé : 5 min).
+- **E-mails d'auth (Gmail SMTP)** : Gmail plafonne un compte gratuit à ~500
+  destinataires / 24 h et ~100 / heure. Le plafond Supabase est réglé à
+  **20 e-mails/heure par projet** (`rate_limit_email_sent`) : 10× le défaut de 2
+  qui provoquait « too many requests » à l'inscription, et toujours sous Gmail
+  même en usage soutenu (20 × 24 h = 480 < 500). Le délai anti-abus
+  `smtp_max_frequency = 60 s` (un seul e-mail par utilisateur et par minute)
+  reste actif : un utilisateur ne peut pas consommer le quota à lui seul.
+  Réglage : Dashboard → Authentication → **Rate Limits** (« Emails sent by
+  Supabase Auth ») ; SMTP : Authentication → **Emails**.
 
 L'APK de test (EAS Build, profil `preview`) pointe sur le Cloud via
 `mobile/.env.production` + `mobile/eas.json` (env du build). Le back-office
